@@ -93,10 +93,13 @@ cc_binary(
     ],
 )
 
-cc_binary(
+cc_library(
     name = "panda_status_drake_subscriber",
     srcs = [
         "panda_status_drake_subscriber.cc",
+    ],
+    hdrs = [
+        "panda_status_drake_subscriber.h",
     ],
     deps = [
         "@drake//common:common",
@@ -104,6 +107,17 @@ cc_binary(
         "@drake//systems/framework",
         "@drake//systems/analysis",
         "@drake//systems/lcm",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_binary(
+    name = "panda_status_drake_subscriber_bin",
+    srcs = [
+        "panda_status_drake_subscriber_main.cc",
+    ],
+    deps = [
+        ":panda_status_drake_subscriber",
     ],
 )
 
