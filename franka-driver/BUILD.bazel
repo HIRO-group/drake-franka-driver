@@ -81,4 +81,30 @@ cc_binary(
         "@drake//manipulation/models/franka_description:models",
     ],
 )
+
+cc_binary(
+    name = "panda_status_subscriber",
+    srcs = [
+        "panda_status_subscriber.cc",
+    ],
+    deps = [
+        "@drake//lcmtypes:panda",
+        "@lcm",
+    ],
+)
+
+cc_binary(
+    name = "panda_status_drake_subscriber",
+    srcs = [
+        "panda_status_drake_subscriber.cc",
+    ],
+    deps = [
+        "@drake//common:common",
+        "@drake//lcmtypes:panda",
+        "@drake//systems/framework",
+        "@drake//systems/analysis",
+        "@drake//systems/lcm",
+    ],
+)
+
 add_lint_tests()

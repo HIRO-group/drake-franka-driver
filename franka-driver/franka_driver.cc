@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <iostream>
 
 #include <franka/exception.h>
 #include <franka/model.h>
@@ -361,6 +362,8 @@ class PandaDriver {
   franka::JointVelocities DoVelocityControl(
       const franka::RobotState& state, franka::Duration)  {
     PublishRobotState(state);
+    std::cout<<"Using DoVelocityControl"<<std::endl;
+    PrintRobotState(state);
 
     // Poll for incoming command messages.
     while (lcm_.handleTimeout(0) > 0) {}
@@ -409,6 +412,7 @@ class PandaDriver {
   franka::JointPositions DoPositionControl(
       const franka::RobotState& state, franka::Duration)  {
     PublishRobotState(state);
+    PrintRobotState(state);
 
     // Poll for incoming command messages.
     while (lcm_.handleTimeout(0) > 0) {}
@@ -463,6 +467,8 @@ class PandaDriver {
   franka::Torques DoPositionControlViaTorque(
       const franka::RobotState& state, franka::Duration period)  {
     PublishRobotState(state);
+    std::cout<<"Using DoPositionControlViaTorque"<<std::endl;
+    PrintRobotState(state);
 
     // Poll for incoming command messages.
     while (lcm_.handleTimeout(0) > 0) {}
@@ -617,6 +623,8 @@ class PandaDriver {
   franka::Torques DoTorqueControl(
       const franka::RobotState& state, franka::Duration period)  {
     PublishRobotState(state);
+    std::cout<<"Using DoTorqueControl"<<std::endl;
+    PrintRobotState(state);
 
     // Poll for incoming command messages.
     while (lcm_.handleTimeout(0) > 0) {}
@@ -688,6 +696,16 @@ class PandaDriver {
   }
 
   void PublishRobotState(const franka::RobotState& state) {
+    // std::cout<<"PublishRobotState"<<std::endl;
+    // std::cout<<"Robot state: ["<<std::endl;
+    // std::cout<<state.q[0];
+    // std::cout<<", "<<state.q[1];
+    // std::cout<<", "<<state.q[2];
+    // std::cout<<", "<<state.q[3];
+    // std::cout<<", "<<state.q[4];
+    // std::cout<<", "<<state.q[5];
+    // std::cout<<", "<<state.q[6];
+    // std::cout<<"]"<<std::endl;
     state_latest_ = state;
     status_msg_.utime = std::chrono::duration_cast<std::chrono::microseconds>(
       std::chrono::system_clock::now().time_since_epoch()).count();
@@ -735,7 +753,32 @@ class PandaDriver {
     }
 
     status_msg_.robot_utime = state.time.toMSec() * 1000;
-    lcm_.publish(lcm_status_channel_, &status_msg_);
+    
+    // Debug printing for LCM publish
+    std::cout << "\n=== LCM Debug Info ===" << std::endl;
+    std::cout << "Publishing to LCM channel: " << lcm_status_channel_ << std::endl;
+    std::cout << "Message timestamp: " << status_msg_.utime << std::endl;
+    std::cout << "Joint positions: [";
+    for (size_t i = 0; i < status_msg_.joint_position.size(); ++i) {
+        std::cout << status_msg_.joint_position[i];
+        if (i < status_msg_.joint_position.size() - 1) std::cout << ", ";
+    }
+    std::cout << "]" << std::endl;
+    
+    // Add more detailed debug info
+    std::cout << "LCM URL: " << FLAGS_lcm_url << std::endl;
+    std::cout << "Message size: " << status_msg_.getEncodedSize() << " bytes" << std::endl;
+    std::cout << "Robot mode: " << static_cast<int>(status_msg_.robot_mode) << std::endl;
+    std::cout << "Control success rate: " << status_msg_.control_command_success_rate << std::endl;
+    
+    try {
+        std::cout << "Attempting to publish message..." << std::endl;
+        lcm_.publish(lcm_status_channel_, &status_msg_);
+        std::cout << "Successfully published message" << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "Error publishing message: " << e.what() << std::endl;
+    }
+    std::cout << "=== End LCM Debug Info ===\n" << std::endl;
   }
 
   franka::Robot robot_;
