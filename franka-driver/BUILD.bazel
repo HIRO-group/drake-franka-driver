@@ -118,6 +118,9 @@ cc_binary(
     ],
     deps = [
         ":panda_status_drake_subscriber",
+        "@drake//systems/framework",
+        "@drake//systems/lcm",
+        "@drake//systems/primitives",
     ],
 )
 

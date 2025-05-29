@@ -79,6 +79,29 @@ void PandaStatusReceiver::CalcLcmOutput(
   DRAKE_THROW_UNLESS(status.num_joints == num_joints_);
   DRAKE_THROW_UNLESS(static_cast<int>(field.size()) == num_joints_);
 
+  // Print status message whenever this method is called
+  std::cout << "\n=== Panda Status Message ===" << std::endl;
+  std::cout << "Context time: " << context.get_time() << " seconds" << std::endl;
+  std::cout << "Number of joints: " << status.num_joints << std::endl;
+  
+  if (status.num_joints > 0) {
+    std::cout << "\nJoint Positions:" << std::endl;
+    for (int i = 0; i < status.num_joints; ++i) {
+      std::cout << "  Joint " << i << ": " << status.joint_position[i] << " rad" << std::endl;
+    }
+    
+    std::cout << "\nJoint Velocities:" << std::endl;
+    for (int i = 0; i < status.num_joints; ++i) {
+      std::cout << "  Joint " << i << ": " << status.joint_velocity[i] << " rad/s" << std::endl;
+    }
+    
+    std::cout << "\nJoint Torques:" << std::endl;
+    for (int i = 0; i < status.num_joints; ++i) {
+      std::cout << "  Joint " << i << ": " << status.joint_torque[i] << " N⋅m" << std::endl;
+    }
+  }
+  std::cout << "==========================\n" << std::endl;
+
   output->get_mutable_value() = Eigen::Map<const Eigen::VectorXd>(
       field.data(), num_joints_);
 }
