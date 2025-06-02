@@ -13,10 +13,21 @@
 #include "drake/systems/primitives/vector_log_sink.h"
 
 #include "panda_status_drake_subscriber.h"
+#include "shared_memory.hpp"  // your Boost.Interprocess shared memory header
+
+namespace bip = boost::interprocess;
 
 int main() {
+  
   // Create a diagram builder
   drake::systems::DiagramBuilder<double> builder;
+
+  // Initialize shared memory
+  bip::shared_memory_object::remove("MySharedMemory");
+  bip::managed_shared_memory segment(bip::create_only, "MySharedMemory", 65536);
+  const auto alloc = SharedMemoryData::ShmemAllocator(segment.get_segment_manager());
+  SharedMemoryData* shm = segment.construct<SharedMemoryData>("SharedData")(alloc);
+
 
   // Create and add the LCM interface system
   auto lcm = std::make_unique<drake::systems::lcm::LcmInterfaceSystem>();
@@ -89,7 +100,33 @@ int main() {
   while (simulator.get_context().get_time() < end_time) {
     // Get current joint positions
     const auto& positions = status_receiver->get_position_output_port().Eval(receiver_context);
-    
+    const auto& velocities = status_receiver->get_velocity_output_port().Eval(receiver_context);
+
+
+    // Concatenate pos and vel into a single vector (size 14)
+    std::vector<double> combined(14);
+    for (int i = 0; i < 7; ++i) {
+      combined[i] = positions[i];
+      combined[i + 7] = velocities[i];
+    }
+
+    // Write to shared memory
+    std::cout << "Writing to shared memory [pos+vel]: ";
+    for (size_t i = 0; i < combined.size(); ++i) {
+    std::cout << combined[i];
+    if (i < combined.size() - 1) std::cout << ", ";
+    }
+    std::cout << std::endl;
+    {
+      bip::scoped_lock<bip::interprocess_mutex> lock(shm->mutex);
+      shm->data.assign(combined.begin(), combined.end());
+      shm->data_ready = true;
+      shm->cond_var.notify_one();
+
+    }
+
+    // Optional delay for lower CPU usage
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
     // Write to CSV
     csv_file << std::fixed << std::setprecision(6) << simulator.get_context().get_time() << ",";
     for (int i = 0; i < 7; ++i) {
