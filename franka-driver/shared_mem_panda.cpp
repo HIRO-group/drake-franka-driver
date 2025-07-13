@@ -60,6 +60,18 @@ int main() {
     simulator.AdvanceTo(simulator.get_context().get_time() + step);
 
     const auto& status_context = diagram->GetSubsystemContext(*status_receiver, simulator.get_context());
+    std::vector<double> wrench;
+    {
+      bip::scoped_lock<bip::interprocess_mutex> lock(shm->mutex);
+      wrench.assign(shm->ee_wrench.begin(), shm->ee_wrench.end());
+    }
+
+    std::cout << "End-effector wrench [Fx, Fy, Fz, Tx, Ty, Tz]: ";
+    for (size_t i = 0; i < wrench.size(); ++i) {
+      std::cout << wrench[i];
+      if (i < wrench.size() - 1) std::cout << ", ";
+    }
+    std::cout << std::endl;
 
     if (status_receiver->get_input_port(0).HasValue(status_context)) {
         std::cout << "Input port has value!" << std::endl;

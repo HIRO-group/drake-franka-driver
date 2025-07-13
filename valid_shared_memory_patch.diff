@@ -1,0 +1,55 @@
+diff --git a/shared_memory.hpp b/shared_memory.hpp
+--- a/shared_memory.hpp
++++ b/shared_memory.hpp
+@@ struct SharedMemoryData {
+     typedef bip::allocator<double, bip::managed_shared_memory::segment_manager> ShmemAllocator;
+-    typedef bip::vector<double, ShmemAllocator> SharedVector;
++    typedef bip::vector<double, ShmemAllocator> SharedVector;
+
+     SharedMemoryData(const ShmemAllocator& alloc)
+-        : data(alloc), ee_wrench(alloc),data_ready(false) {}
++        : data(alloc), ee_wrench(alloc), data_ready(false) {}
+
+     bip::interprocess_mutex mutex;
+     bip::interprocess_condition cond_var;
+
+     bool data_ready;
+     SharedVector data;
+-    ShmemVector ee_wrench;
++    SharedVector ee_wrench;
+ };
+
+diff --git a/franka_driver.cc b/franka_driver.cc
+--- a/franka_driver.cc
++++ b/franka_driver.cc
+@@ class PandaDriver {
++  // Shared memory interface
++  bip::managed_shared_memory shm_segment_;
++  SharedMemoryData* shm_;
+
+@@ PandaDriver::PandaDriver(...)
+     : robot_(robot_ip_address, franka::RealtimeConfig::kIgnore),
+       model_(robot_.loadModel()),
+       lcm_(lcm_url),
+       lcm_command_channel_(lcm_command_channel),
+       lcm_status_channel_(lcm_status_channel),
+       latch_(latch),
+       expire_usec_(expire_usec),
+       joint_torque_limit_(joint_torque_limit),
+       cartesian_force_limit_(cartesian_force_limit),
+       remove_gravity_compensation_(remove_gravity_compensation),
+-      plant_(std::move(plant)) {
++      plant_(std::move(plant)),
++      shm_segment_(bip::open_only, "MySharedMemory"),
++      shm_(shm_segment_.find<SharedMemoryData>("SharedData").first) {
+
+@@ void PublishRobotState(const franka::RobotState& state) {
++    // Publish end-effector wrench to shared memory
++    std::array<double, 6> wrench_array = state.O_F_ext_hat_K;
++    {
++      bip::scoped_lock<bip::interprocess_mutex> lock(shm_->mutex);
++      shm_->ee_wrench.clear();
++      shm_->ee_wrench.insert(shm_->ee_wrench.end(), wrench_array.begin(), wrench_array.end());
++      shm_->data_ready = true;
++      shm_->cond_var.notify_one();
++    }

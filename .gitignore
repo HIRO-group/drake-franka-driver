@@ -8,3 +8,5 @@ bazel.log
 core
 *~
 *.jlp
+
+*.txt

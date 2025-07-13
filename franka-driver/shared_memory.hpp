@@ -18,11 +18,13 @@ struct SharedMemoryData {
     typedef bip::vector<double, ShmemAllocator> SharedVector;
 
     SharedMemoryData(const ShmemAllocator& alloc)
-        : data(alloc), data_ready(false) {}
+        : data(alloc), ee_wrench(alloc),data_ready(false) {}
 
     bip::interprocess_mutex mutex;
     bip::interprocess_condition cond_var;
 
     bool data_ready;
     SharedVector data;
+    ShmemVector ee_wrench;  // new: end-effector wrench (size 6)
+
 };

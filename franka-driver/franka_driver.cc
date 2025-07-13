@@ -21,6 +21,8 @@
 #include "drake/multibody/parsing/parser.h"
 #include "drake/multibody/parsing/process_model_directives.h"
 #include "drake/multibody/plant/multibody_plant.h"
+#include "shared_memory.hpp"
+#include <boost/interprocess/managed_shared_memory.hpp>
 
 DEFINE_string(robot_ip_address, "", "Address of the shop floor interface");
 DEFINE_string(lcm_url, "", "LCM URL for Panda driver");
@@ -695,6 +697,13 @@ class PandaDriver {
     command_ = *command;
   }
 
+  namespace bip = boost::interprocess;
+  bip::managed_shared_memory segment(bip::open_only, "MySharedMemory");
+  SharedMemoryData* shm = segment.find<SharedMemoryData>("SharedData").first;
+  shm->data_ready = true;
+  shm->data = state.q;
+  shm->ee_wrench = state.tau_ext_hat_filtered;
+
   void PublishRobotState(const franka::RobotState& state) {
     // std::cout<<"PublishRobotState"<<std::endl;
     // std::cout<<"Robot state: ["<<std::endl;
@@ -706,6 +715,15 @@ class PandaDriver {
     // std::cout<<", "<<state.q[5];
     // std::cout<<", "<<state.q[6];
     // std::cout<<"]"<<std::endl;
+    std::array<double, 6> wrench_array = state.O_F_ext_hat_K;
+
+    {
+      bip::scoped_lock<bip::interprocess_mutex> lock(shm->mutex);
+      shm->ee_wrench.clear();
+      shm->ee_wrench.insert(shm->ee_wrench.end(), wrench_array.begin(), wrench_array.end());
+      shm->data_ready = true;
+      shm->cond_var.notify_one();
+    }
     state_latest_ = state;
     status_msg_.utime = std::chrono::duration_cast<std::chrono::microseconds>(
       std::chrono::system_clock::now().time_since_epoch()).count();
