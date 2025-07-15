@@ -22,11 +22,31 @@ int main() {
   // Create a diagram builder
   drake::systems::DiagramBuilder<double> builder;
 
-  // Initialize shared memory
+  // Initialize shared memory for writing combined data
   bip::shared_memory_object::remove("MySharedMemory");
   bip::managed_shared_memory segment(bip::create_only, "MySharedMemory", 65536);
   const auto alloc = SharedMemoryData::ShmemAllocator(segment.get_segment_manager());
   SharedMemoryData* shm = segment.construct<SharedMemoryData>("SharedData")(alloc);
+
+  // Initialize shared memory for reading wrench data
+  bip::managed_shared_memory segment_torque(bip::open_or_create, "torque_shared_data", 65536);
+  const auto alloc_torque = SharedMemoryData::ShmemAllocator(segment_torque.get_segment_manager());
+  SharedMemoryData* shm_torque = nullptr;
+  
+  // Try to find existing torque shared memory data
+  try {
+    shm_torque = segment_torque.find<SharedMemoryData>("SharedData").first;
+    if (shm_torque == nullptr) {
+      // Create the shared memory data if it doesn't exist
+      shm_torque = segment_torque.construct<SharedMemoryData>("SharedData")(alloc_torque);
+      std::cout << "Created new torque shared memory data" << std::endl;
+    } else {
+      std::cout << "Found existing torque shared memory data" << std::endl;
+    }
+  } catch (const std::exception& e) {
+    std::cerr << "Torque shared memory initialization failed: " << e.what() << std::endl;
+    shm_torque = nullptr;
+  }
 
 
   // Create and add the LCM interface system
@@ -102,27 +122,43 @@ int main() {
     const auto& positions = status_receiver->get_position_output_port().Eval(receiver_context);
     const auto& velocities = status_receiver->get_velocity_output_port().Eval(receiver_context);
 
+    // Read wrench data from torque shared memory
+    std::vector<double> wrench(6, 0.0);  // Default to zeros if no wrench data
+    if (shm_torque != nullptr) {
+      try {
+        bip::scoped_lock<bip::interprocess_mutex> lock(shm_torque->mutex);
+        if (!shm_torque->ee_wrench.empty()) {
+          wrench.assign(shm_torque->ee_wrench.begin(), shm_torque->ee_wrench.end());
+        }
+      } catch (const std::exception& e) {
+        std::cerr << "Failed to read wrench from shared memory: " << e.what() << std::endl;
+      }
+    }
 
-    // Concatenate pos and vel into a single vector (size 14)
-    std::vector<double> combined(14);
+    // Concatenate pos, vel, and wrench into a single vector (size 20)
+    std::vector<double> combined(20);
     for (int i = 0; i < 7; ++i) {
-      combined[i] = positions[i];
-      combined[i + 7] = velocities[i];
+      combined[i] = positions[i];        // Indices 0-6: joint positions
+      combined[i + 7] = velocities[i];   // Indices 7-13: joint velocities
+    }
+    for (int i = 0; i < 6; ++i) {
+      combined[14 + i] = wrench[i];      // Indices 14-19: end-effector wrench
     }
 
     // Write to shared memory
-    std::cout << "Writing to shared memory [pos+vel]: ";
+    std::cout << "Writing to shared memory [pos+vel+wrench]: ";
     for (size_t i = 0; i < combined.size(); ++i) {
-    std::cout << combined[i];
-    if (i < combined.size() - 1) std::cout << ", ";
+      std::cout << combined[i];
+      if (i < combined.size() - 1) std::cout << ", ";
     }
     std::cout << std::endl;
+    
     {
       bip::scoped_lock<bip::interprocess_mutex> lock(shm->mutex);
-      shm->data.assign(combined.begin(), combined.end());
+      shm->data.assign(combined.begin(), combined.begin() + 14);        // pos + vel
+      shm->ee_wrench.assign(combined.begin() + 14, combined.end());     // wrench
       shm->data_ready = true;
       shm->cond_var.notify_one();
-
     }
 
     // Optional delay for lower CPU usage

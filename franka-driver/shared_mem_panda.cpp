@@ -21,10 +21,16 @@ namespace bip = boost::interprocess;
 
 int main() {
   // Initialize shared memory
+  std::cout<<"if ever run say yellow"<<std::endl;
   bip::shared_memory_object::remove("MySharedMemory");
   bip::managed_shared_memory segment(bip::create_only, "MySharedMemory", 65536);
   const auto alloc = SharedMemoryData::ShmemAllocator(segment.get_segment_manager());
   SharedMemoryData* shm = segment.construct<SharedMemoryData>("SharedData")(alloc);
+
+  bip::shared_memory_object::remove("torque_shared_data");
+  bip::managed_shared_memory segment_torque(bip::create_only, "torque_shared_data", 65536);
+  const auto alloc_torque = SharedMemoryData::ShmemAllocator(segment_torque.get_segment_manager());
+  SharedMemoryData* shm_torque = segment_torque.construct<SharedMemoryData>("SharedData")(alloc_torque);
 
   // Build Drake diagram
   drake::systems::DiagramBuilder<double> builder;
@@ -62,8 +68,8 @@ int main() {
     const auto& status_context = diagram->GetSubsystemContext(*status_receiver, simulator.get_context());
     std::vector<double> wrench;
     {
-      bip::scoped_lock<bip::interprocess_mutex> lock(shm->mutex);
-      wrench.assign(shm->ee_wrench.begin(), shm->ee_wrench.end());
+      bip::scoped_lock<bip::interprocess_mutex> lock(shm_torque->mutex);
+      wrench.assign(shm_torque->ee_wrench.begin(), shm_torque->ee_wrench.end());
     }
 
     std::cout << "End-effector wrench [Fx, Fy, Fz, Tx, Ty, Tz]: ";
@@ -84,12 +90,16 @@ int main() {
     const auto& pos_vec = status_receiver->get_position_output_port().Eval(status_context);
     const auto& vel_vec = status_receiver->get_velocity_output_port().Eval(status_context);
 
-    // Concatenate pos and vel into a single vector (size 14)
-    std::vector<double> combined(14);
+    // Concatenate pos, vel, and wrench into a single vector (size 20)
+    std::vector<double> combined(20);
     for (int i = 0; i < 7; ++i) {
       combined[i] = pos_vec[i];
       combined[i + 7] = vel_vec[i];
     }
+    for (int i = 0; i < 6; ++i) {
+      combined[14 + i] = wrench[i];
+    }
+
 
     // Write to shared memory
     std::cout << "Writing to shared memory [pos+vel]: ";
@@ -97,14 +107,15 @@ int main() {
     std::cout << combined[i];
     if (i < combined.size() - 1) std::cout << ", ";
     }
+    std::cout<< "Death" << std::endl;
     std::cout << std::endl;
-    {
+   {
       bip::scoped_lock<bip::interprocess_mutex> lock(shm->mutex);
-      shm->data.assign(combined.begin(), combined.end());
-      shm->data_ready = true;
-      shm->cond_var.notify_one();
-
-    }
+    shm->data.assign(combined.begin(), combined.begin() + 14);        // pos + vel
+    shm->ee_wrench.assign(combined.begin() + 14, combined.end());     // wrench
+    shm->data_ready = true;
+    shm->cond_var.notify_one();
+  }
 
     // Optional delay for lower CPU usage
     std::this_thread::sleep_for(std::chrono::milliseconds(10));

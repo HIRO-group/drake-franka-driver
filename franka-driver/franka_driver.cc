@@ -110,6 +110,7 @@ namespace franka_driver {
 namespace {
 
 namespace sp = std::placeholders;
+namespace bip = boost::interprocess;
 using drake::multibody::MultibodyPlant;
 using drake::multibody::Parser;
 using drake::multibody::parsing::LoadModelDirectives;
@@ -229,9 +230,28 @@ class PandaDriver {
         joint_torque_limit_(joint_torque_limit),
         cartesian_force_limit_(cartesian_force_limit),
         remove_gravity_compensation_(remove_gravity_compensation),
-        plant_(std::move(plant)) {
+        plant_(std::move(plant)),
+        shm_segment_(bip::open_or_create, "torque_shared_data", 65536),  // 64KB should be enough
+        shm_(nullptr) {
     drake::log()->info(
         "Connected to Panda arm version {}", robot_.serverVersion());
+
+    // Try to find existing shared memory data, or create it if it doesn't exist
+    try {
+        shm_ = shm_segment_.find<SharedMemoryData>("SharedData").first;
+        if (shm_ == nullptr) {
+            // Create the shared memory data if it doesn't exist
+            bip::managed_shared_memory::segment_manager* sm = shm_segment_.get_segment_manager();
+            SharedMemoryData::ShmemAllocator alloc_inst(sm);
+            shm_ = shm_segment_.construct<SharedMemoryData>("SharedData")(alloc_inst);
+            drake::log()->info("Created new shared memory data");
+        } else {
+            drake::log()->info("Found existing shared memory data");
+        }
+    } catch (const std::exception& e) {
+        drake::log()->warn("Shared memory initialization failed: {}", e.what());
+        shm_ = nullptr;
+    }
 
     const auto state = robot_.readOnce();
 
@@ -697,15 +717,8 @@ class PandaDriver {
     command_ = *command;
   }
 
-  namespace bip = boost::interprocess;
-  bip::managed_shared_memory segment(bip::open_only, "MySharedMemory");
-  SharedMemoryData* shm = segment.find<SharedMemoryData>("SharedData").first;
-  shm->data_ready = true;
-  shm->data = state.q;
-  shm->ee_wrench = state.tau_ext_hat_filtered;
-
   void PublishRobotState(const franka::RobotState& state) {
-    // std::cout<<"PublishRobotState"<<std::endl;
+    
     // std::cout<<"Robot state: ["<<std::endl;
     // std::cout<<state.q[0];
     // std::cout<<", "<<state.q[1];
@@ -716,13 +729,18 @@ class PandaDriver {
     // std::cout<<", "<<state.q[6];
     // std::cout<<"]"<<std::endl;
     std::array<double, 6> wrench_array = state.O_F_ext_hat_K;
-
-    {
-      bip::scoped_lock<bip::interprocess_mutex> lock(shm->mutex);
-      shm->ee_wrench.clear();
-      shm->ee_wrench.insert(shm->ee_wrench.end(), wrench_array.begin(), wrench_array.end());
-      shm->data_ready = true;
-      shm->cond_var.notify_one();
+    std::cout<<"Wrench array: ["<<wrench_array[0]<<", "<<wrench_array[1]<<", "<<wrench_array[2]<<", "<<wrench_array[3]<<", "<<wrench_array[4]<<", "<<wrench_array[5]<<"]"<<std::endl;
+    // Write EE wrench to shared memory (only if shared memory is available)
+    if (shm_ != nullptr) {
+        try {
+            bip::scoped_lock<bip::interprocess_mutex> lock(shm_->mutex);
+            shm_->ee_wrench.clear();
+            shm_->ee_wrench.insert(shm_->ee_wrench.end(), wrench_array.begin(), wrench_array.end());
+            shm_->data_ready = true;
+            shm_->cond_var.notify_one();
+        } catch (const std::exception& e) {
+            drake::log()->warn("Failed to write to shared memory: {}", e.what());
+        }
     }
     state_latest_ = state;
     status_msg_.utime = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -827,6 +845,10 @@ class PandaDriver {
 
   std::unique_ptr<MultibodyPlant<double>> plant_;
   std::unique_ptr<Context<double>> context_;
+
+  // Shared memory members
+  bip::managed_shared_memory shm_segment_;
+  SharedMemoryData* shm_;
 };
 
 // N.B. Using a resource path allows us to locate

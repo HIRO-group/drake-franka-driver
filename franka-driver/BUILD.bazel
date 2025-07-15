@@ -10,6 +10,7 @@ cc_binary(
         "franka_driver.cc",
     ],
     deps = [
+        ":shared_memory_lib",
         "@drake//common:common",
         "@drake//lcmtypes:panda",
         "@drake//multibody/plant",
@@ -30,6 +31,7 @@ cc_binary(
         "franka_driver.cc",
     ],
     deps = [
+        ":shared_memory_lib",
         "@drake//common:common",
         "@drake//lcmtypes:panda",
         "@drake//multibody/plant",
