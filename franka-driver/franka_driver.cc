@@ -381,6 +381,31 @@ class PandaDriver {
     robot_.setCartesianImpedance({{3000, 3000, 3000, 300, 300, 300}});
   }
 
+  std::array<double, 16> ComputeInverseTransformation(const std::array<double, 16>& T) {
+    // Extract rotation matrix (3x3) and translation vector (3x1)
+    Eigen::Matrix3d R;
+    Eigen::Vector3d t;
+    
+    // Column-major format: [R00, R10, R20, 0, R01, R11, R21, 0, R02, R12, R22, 0, tx, ty, tz, 1]
+    R << T[0], T[4], T[8],
+         T[1], T[5], T[9],
+         T[2], T[6], T[10];
+    t << T[12], T[13], T[14];
+    
+    // Compute inverse transformation
+    Eigen::Matrix3d R_inv = R.transpose();
+    Eigen::Vector3d t_inv = -R_inv * t;
+    
+    // Construct the inverse transformation matrix in column-major format
+    std::array<double, 16> T_inv;
+    T_inv[0] = R_inv(0,0); T_inv[4] = R_inv(0,1); T_inv[8] = R_inv(0,2);  T_inv[12] = t_inv(0);
+    T_inv[1] = R_inv(1,0); T_inv[5] = R_inv(1,1); T_inv[9] = R_inv(1,2);  T_inv[13] = t_inv(1);
+    T_inv[2] = R_inv(2,0); T_inv[6] = R_inv(2,1); T_inv[10] = R_inv(2,2); T_inv[14] = t_inv(2);
+    T_inv[3] = 0.0;        T_inv[7] = 0.0;        T_inv[11] = 0.0;       T_inv[15] = 1.0;
+    
+    return T_inv;
+  }
+
   franka::JointVelocities DoVelocityControl(
       const franka::RobotState& state, franka::Duration)  {
     PublishRobotState(state);
@@ -719,6 +744,30 @@ class PandaDriver {
 
   void PublishRobotState(const franka::RobotState& state) {
     
+    // Set stiffness frame K to base frame before reading wrench data
+    // Get the transformation from end effector to base frame
+    std::array<double, 16> base_T_EE = model_.pose(franka::Frame::kEndEffector, state);
+    
+    // Compute inverse transformation (from end effector to base)
+    std::array<double, 16> EE_T_K = ComputeInverseTransformation(base_T_EE);
+    
+    // Set the stiffness frame K
+    try {
+        robot_.setK(EE_T_K);
+        drake::log()->info("Successfully set stiffness frame K to base frame");
+        
+        // Print the transformation matrix for verification
+        std::cout << "Stiffness frame K transformation (EE to base):" << std::endl;
+        for (int i = 0; i < 4; ++i) {
+            for (int j = 0; j < 4; ++j) {
+                std::cout << EE_T_K[i + j*4] << " ";
+            }
+            std::cout << std::endl;
+        }
+    } catch (const franka::Exception& e) {
+        drake::log()->error("Failed to set stiffness frame K: {}", e.what());
+    }
+    
     // std::cout<<"Robot state: ["<<std::endl;
     // std::cout<<state.q[0];
     // std::cout<<", "<<state.q[1];
@@ -730,7 +779,44 @@ class PandaDriver {
     // std::cout<<"]"<<std::endl;
     std::array<double, 6> wrench_array = state.O_F_ext_hat_K;
     std::cout<<"Wrench array: ["<<wrench_array[0]<<", "<<wrench_array[1]<<", "<<wrench_array[2]<<", "<<wrench_array[3]<<", "<<wrench_array[4]<<", "<<wrench_array[5]<<"]"<<std::endl;
-    // Write EE wrench to shared memory (only if shared memory is available)
+    
+    // Get Jacobian and gravity vector using libfranka model
+    Eigen::MatrixXd jacobian(6, kNdof);
+    Eigen::VectorXd gravity_vec(kNdof);
+    
+    // Get Jacobian (geometric Jacobian) from libfranka
+    std::array<double, 42> jacobian_array = model_.zeroJacobian(franka::Frame::kEndEffector, state);
+    jacobian = Eigen::Map<const Eigen::Matrix<double, 6, 7>>(jacobian_array.data());
+    
+    // Get gravity vector from libfranka
+    std::array<double, kNdof> gravity_array = model_.gravity(state);
+    gravity_vec = Eigen::Map<const Eigen::VectorXd>(gravity_array.data(), kNdof);
+    
+    // Print Jacobian and gravity vector
+    std::cout << "Jacobian (6x7):" << std::endl << jacobian << std::endl;
+    std::cout << "Gravity vector (7x1): [" << gravity_vec.transpose() << "]" << std::endl;
+    
+    // Compute gravity compensation: J^T * g
+    Eigen::VectorXd gravity_compensation = jacobian.transpose() * gravity_vec;
+    std::cout << "Gravity compensation (6x1): [" << gravity_compensation.transpose() << "]" << std::endl;
+    
+    // // Convert wrench array to Eigen vector for computation
+    // Eigen::VectorXd wrench_eigen(6);
+    // wrench_eigen << wrench_array[0], wrench_array[1], wrench_array[2], 
+    //                 wrench_array[3], wrench_array[4], wrench_array[5];
+    
+    // // Subtract gravity compensation from wrench
+    // Eigen::VectorXd compensated_wrench = wrench_eigen - gravity_compensation;
+    // std::cout << "Original wrench: [" << wrench_eigen.transpose() << "]" << std::endl;
+    // std::cout << "Compensated wrench: [" << compensated_wrench.transpose() << "]" << std::endl;
+    
+    // // Convert back to array for shared memory
+    // std::array<double, 6> compensated_wrench_array;
+    // for (int i = 0; i < 6; ++i) {
+    //     compensated_wrench_array[i] = compensated_wrench(i);
+    // }
+    
+    // Write compensated EE wrench to shared memory (only if shared memory is available)
     if (shm_ != nullptr) {
         try {
             bip::scoped_lock<bip::interprocess_mutex> lock(shm_->mutex);

@@ -117,8 +117,8 @@ int main() {
   const double dt = 0.01;  // 10ms sampling rate
   const double end_time = 10.0;  // 10 seconds total
 
-  while (simulator.get_context().get_time() < end_time) {
-    // Get current joint positions
+  while (true) {
+    // Get current joint poszitions
     const auto& positions = status_receiver->get_position_output_port().Eval(receiver_context);
     const auto& velocities = status_receiver->get_velocity_output_port().Eval(receiver_context);
 
