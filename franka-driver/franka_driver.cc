@@ -197,12 +197,12 @@ void SetGainsForJointStiffnessErrorToTorque(
   // #9183.
   if (kp != nullptr) {
     DRAKE_DEMAND(kp->size() == kNdof);
-    *kp << 875.0, 1050.0, 1050.0, 875.0, 175.0, 350.0, 87.5;
+    *kp << 120.,120.,120.,100.,50.,45.,15.;
     *kp *= FLAGS_torque_kp_scale;
   }
   if (kd != nullptr) {
     DRAKE_DEMAND(kd->size() == kNdof);
-    *kd << 37.5, 50.0, 37.5, 25.0, 5.0, 3.75, 2.5;
+    *kd << 8.,8.,8.,5.,2.,2.,1.;
     *kd *= FLAGS_torque_kd_scale;
   }
 }
@@ -753,17 +753,17 @@ class PandaDriver {
     
     // Set the stiffness frame K
     try {
-        robot_.setK(EE_T_K);
+        // robot_.setK(EE_T_K);
         drake::log()->info("Successfully set stiffness frame K to base frame");
         
         // Print the transformation matrix for verification
-        std::cout << "Stiffness frame K transformation (EE to base):" << std::endl;
-        for (int i = 0; i < 4; ++i) {
-            for (int j = 0; j < 4; ++j) {
-                std::cout << EE_T_K[i + j*4] << " ";
-            }
-            std::cout << std::endl;
-        }
+        // std::cout << "Stiffness frame K transformation (EE to base):" << std::endl;
+        // for (int i = 0; i < 4; ++i) {
+        //     for (int j = 0; j < 4; ++j) {
+        //         std::cout << EE_T_K[i + j*4] << " ";
+        //     }
+        //     std::cout << std::endl;
+        // }
     } catch (const franka::Exception& e) {
         drake::log()->error("Failed to set stiffness frame K: {}", e.what());
     }
@@ -778,7 +778,7 @@ class PandaDriver {
     // std::cout<<", "<<state.q[6];
     // std::cout<<"]"<<std::endl;
     std::array<double, 6> wrench_array = state.O_F_ext_hat_K;
-    std::cout<<"Wrench array: ["<<wrench_array[0]<<", "<<wrench_array[1]<<", "<<wrench_array[2]<<", "<<wrench_array[3]<<", "<<wrench_array[4]<<", "<<wrench_array[5]<<"]"<<std::endl;
+    // std::cout<<"Wrench array: ["<<wrench_array[0]<<", "<<wrench_array[1]<<", "<<wrench_array[2]<<", "<<wrench_array[3]<<", "<<wrench_array[4]<<", "<<wrench_array[5]<<"]"<<std::endl;
     
     // Get Jacobian and gravity vector using libfranka model
     Eigen::MatrixXd jacobian(6, kNdof);
@@ -793,12 +793,12 @@ class PandaDriver {
     gravity_vec = Eigen::Map<const Eigen::VectorXd>(gravity_array.data(), kNdof);
     
     // Print Jacobian and gravity vector
-    std::cout << "Jacobian (6x7):" << std::endl << jacobian << std::endl;
-    std::cout << "Gravity vector (7x1): [" << gravity_vec.transpose() << "]" << std::endl;
+    // std::cout << "Jacobian (6x7):" << std::endl << jacobian << std::endl;
+    // std::cout << "Gravity vector (7x1): [" << gravity_vec.transpose() << "]" << std::endl;
     
     // Compute gravity compensation: J^T * g
     Eigen::VectorXd gravity_compensation = jacobian.transpose() * gravity_vec;
-    std::cout << "Gravity compensation (6x1): [" << gravity_compensation.transpose() << "]" << std::endl;
+    // std::cout << "Gravity compensation (6x1): [" << gravity_compensation.transpose() << "]" << std::endl;
     
     // // Convert wrench array to Eigen vector for computation
     // Eigen::VectorXd wrench_eigen(6);
