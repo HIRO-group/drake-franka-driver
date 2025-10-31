@@ -14,17 +14,65 @@ the driver: `bazel-bin/franka-driver/franka_driver_v4` and
 Use `franka_driver_v5` for the FR-3 robots.
 
 # Running the driver
-To run the driver in position mode, use the following command:
+
+You can run the driver via `bazel run` (recommended) or using the built binary in `bazel-bin`.
+
+When using `bazel run`, remember to separate Bazel flags from program flags with `--`.
+
+## Common commands
+
+Run the v4 driver (Franka Panda) in position mode using a torque-based position controller and vacuum gripper:
+
 ```
-    bazel-bin/franka-driver/franka_driver_v5 --expire_sec=0.05 --robot_ip_address=<ip-addr> --control_mode=position
+bazelisk run //franka-driver:franka_driver_v4 -- \
+  --use_mbp \
+  --expire_sec=0.05 \
+  --robot_ip_address=192.168.0.2 \
+  --control_mode=position \
+  --use_torque_for_position=true \
+  --vacuum
+```
+> You can use the V5 Driver if using the FR3
+
+Start the status subscriber / shared-memory bridge:
+
+```
+bazelisk run //franka-driver:panda_status_drake_subscriber_main
 ```
 
-To run the driver in torque mode, use the following command:
+Optional verbose debug output for the subscriber:
+
 ```
-bazel-bin/franka-driver/franka_driver_v5 --use_mbp --expire_sec=0.05 --robot_ip_address=<ip-addr> --control_mode=torque
+bazelisk run //franka-driver:panda_status_drake_subscriber_main -- --debug
 ```
 
-To add a gripper, update the `models/add_franka_control.yaml` with the respective gripper.
+## Flag reference (driver)
+
+- `--robot_ip_address=STRING`: IP address of the robot controller (required).
+- `--control_mode=STRING`: One of `status_only`, `velocity`, `position`, `torque`.
+- `--expire_sec=DOUBLE`: Max command staleness allowed before rejecting commands.
+- `--use_mbp`: Load a Drake MultibodyPlant model for internal dynamics computations.
+- `--use_torque_for_position`: In `position` mode, use a torque controller to track positions.
+- `--vacuum` (alias `--vacumm`): Use the vacuum gripper instead of the parallel gripper.
+- `--gripper_ip_address=STRING`: Override the IP for the gripper device (defaults to robot IP).
+- `--lcm_gripper_command_channel=STRING`: LCM channel for gripper/vacuum commands (default `PANDA_GRIPPER_COMMAND`).
+
+## Flag reference (subscriber)
+
+- `--debug`: Enable verbose prints for the Panda status subscriber and shared-memory writes.
+
+## Notes on binaries
+
+- `franka_driver_v4` should be used with FE-3 firmware (libfranka v0.8.x).
+- `franka_driver_v5` should be used with FR-3 firmware (libfranka v0.10.x).
+
+To run using the built binary directly (without `bazel run`):
+
+```
+bazel-bin/franka-driver/franka_driver_v5 --expire_sec=0.05 --robot_ip_address=<ip-addr> --control_mode=position
+```
+
+To add a gripper model to a simulation or directives file, update the relevant model directives.
 
 ## Links
 
