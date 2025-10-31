@@ -4,22 +4,23 @@
 # Write out a repository that contains:
 # - An empty BUILD file, to define a package.
 # - An environ.bzl file with variable assignments for each ENV_NAMES item.
-def _impl(repository_ctx):
-    vars = repository_ctx.attr._vars
-    bzl_content = []
-    for key in vars:
-        value = repository_ctx.os.environ.get(key, "")
-        bzl_content.append("{}='{}'\n".format(key, value))
-    repository_ctx.file(
-        "BUILD.bazel",
-        content = "\n",
-        executable = False,
-    )
-    repository_ctx.file(
-        "environ.bzl",
-        content = "".join(bzl_content),
-        executable = False,
-    )
+def _make_impl(vars):
+    def _impl(repository_ctx):
+        bzl_content = []
+        for key in vars:
+            value = repository_ctx.os.environ.get(key, "")
+            bzl_content.append("{}='{}'\n".format(key, value))
+        repository_ctx.file(
+            "BUILD.bazel",
+            content = "\n",
+            executable = False,
+        )
+        repository_ctx.file(
+            "environ.bzl",
+            content = "".join(bzl_content),
+            executable = False,
+        )
+    return _impl
 
 def environ_repository(name = None, vars = []):
     """Provide specific environment variables for use in a WORKSPACE file.
@@ -31,10 +32,7 @@ def environ_repository(name = None, vars = []):
         print(BAR)
     """
     rule = repository_rule(
-        implementation = _impl,
-        attrs = {
-            "_vars": attr.string_list(default = vars),
-        },
+        implementation = _make_impl(vars),
         local = True,
         environ = vars,
     )

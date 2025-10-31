@@ -5,11 +5,23 @@ build -c opt
 build --force_pic
 build --strip=never
 build --strict_system_includes
+build --legacy_external_runfiles
+run   --legacy_external_runfiles
+test  --legacy_external_runfiles
 
-# Use C++20.
-# Bazel has two universes of command-line copts and linkopts: the "target"
-# config (`--copt`) and the "host" aka "exec" config (`--host_copt`).
-# Since franka_driver doesn't cross-compile, we want the two configs to be the same,
-# so we should always set both flavors for all copts and linkopts.
-build --cxxopt=-std=c++20
-build --host_cxxopt=-std=c++20
+build --incompatible_default_to_explicit_init_py
+build --experimental_cc_implementation_deps
+build --cxxopt="-std=c++20"
+build --host_cxxopt="-std=c++20"
+
+# Local doxygen override (if you vendor it).
+build --override_repository=doxygen=third_party/doxygen_local
+sync  --override_repository=doxygen=third_party/doxygen_local
+
+# Default to CycloneDDS runtime.
+build --action_env=RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+test  --action_env=RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+run   --action_env=RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+
+# Keep Bazel’s env strict.
+build --incompatible_strict_action_env

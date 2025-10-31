@@ -5,6 +5,9 @@
 #include <iomanip>
 #include <limits>
 
+#include <lcm/lcm-cpp.hpp>
+#include <gflags/gflags.h>
+#include "drake/lcmt_drake_signal.hpp"
 #include "drake/systems/lcm/lcm_subscriber_system.h"
 #include "drake/systems/lcm/lcm_interface_system.h"
 #include "drake/systems/analysis/simulator.h"
@@ -17,7 +20,10 @@
 
 namespace bip = boost::interprocess;
 
-int main() {
+DEFINE_bool(debug, false, "Enable verbose prints for Panda status subscriber");
+
+int main(int argc, char** argv) {
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
   
   // Create a diagram builder
   drake::systems::DiagramBuilder<double> builder;
@@ -82,7 +88,7 @@ int main() {
   simulator.set_target_realtime_rate(1.0);
 
   // Create and open CSV file
-  std::ofstream csv_file("joint_angles.csv");
+  std::ofstream csv_file("/home/yaashiagautam/drake-franka-driver/joint_angles.csv");
   if (!csv_file.is_open()) {
     std::cerr << "Failed to open joint_angles.csv" << std::endl;
     return 1;
@@ -115,7 +121,15 @@ int main() {
   // Set up a periodic event to write to CSV
   simulator.get_mutable_context().SetTime(0.0);
   const double dt = 0.01;  // 10ms sampling rate
-  const double end_time = 10.0;  // 10 seconds total
+  // const double end_time = 10.0;  // unused
+
+  // LCM publisher for gripper/vacuum commands
+  lcm::LCM lcm_pub;
+  if (!lcm_pub.good()) {
+    std::cerr << "Failed to initialize LCM publisher" << std::endl;
+    return 1;
+  }
+  const std::string gripper_command_channel = "PANDA_GRIPPER_COMMAND";
 
   while (true) {
     // Get current joint poszitions
@@ -146,12 +160,14 @@ int main() {
     }
 
     // Write to shared memory
-    std::cout << "Writing to shared memory [pos+vel+wrench]: ";
-    for (size_t i = 0; i < combined.size(); ++i) {
-      std::cout << combined[i];
-      if (i < combined.size() - 1) std::cout << ", ";
+    if (FLAGS_debug) {
+      std::cout << "Writing to shared memory [pos+vel+wrench]: ";
+      for (size_t i = 0; i < combined.size(); ++i) {
+        std::cout << combined[i];
+        if (i < combined.size() - 1) std::cout << ", ";
+      }
+      std::cout << std::endl;
     }
-    std::cout << std::endl;
     
     {
       bip::scoped_lock<bip::interprocess_mutex> lock(shm->mutex);
@@ -159,6 +175,88 @@ int main() {
       shm->ee_wrench.assign(combined.begin() + 14, combined.end());     // wrench
       shm->data_ready = true;
       shm->cond_var.notify_one();
+    }
+
+    // Check for gripper command requests in shared memory and publish via LCM
+    if (shm != nullptr) {
+      bool publish = false;
+      std::vector<double> gcmd;
+      {
+        bip::scoped_lock<bip::interprocess_mutex> lock(shm->mutex);
+        if (shm->gripper_cmd_ready && !shm->gripper_cmd.empty()) {
+          gcmd.assign(shm->gripper_cmd.begin(), shm->gripper_cmd.end());
+          shm->gripper_cmd_ready = false;  // consume
+          publish = true;
+        }
+      }
+      if (publish) {
+        const auto get = [&](size_t idx, double def) -> double {
+          return (idx < gcmd.size()) ? gcmd[idx] : def;
+        };
+        const int code = static_cast<int>(get(0, 0.0));
+        drake::lcmt_drake_signal sig{};
+        sig.timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        if (code == 1) {
+          // open
+          const double speed = get(2, 0.1);
+          sig.dim = 2;
+          sig.val.resize(sig.dim);
+          sig.coord.resize(sig.dim);
+          sig.coord[0] = "open";  sig.val[0] = 1.0;
+          sig.coord[1] = "speed"; sig.val[1] = speed;
+        } else if (code == 2) {
+          // close
+          const double width = get(1, 0.0);
+          const double speed = get(2, 0.1);
+          const double force = get(3, 40.0);
+          const double eps_inner = get(4, 0.005);
+          const double eps_outer = get(5, 0.005);
+          sig.dim = 6;
+          sig.val.resize(sig.dim);
+          sig.coord.resize(sig.dim);
+          sig.coord[0] = "close";     sig.val[0] = 1.0;
+          sig.coord[1] = "width";     sig.val[1] = width;
+          sig.coord[2] = "speed";     sig.val[2] = speed;
+          sig.coord[3] = "force";     sig.val[3] = force;
+          sig.coord[4] = "eps_inner"; sig.val[4] = eps_inner;
+          sig.coord[5] = "eps_outer"; sig.val[5] = eps_outer;
+        } else if (code == 3) {
+          // vacuum on
+          const double strength = get(6, 1.0);
+          const double timeout_ms = get(7, -1.0);
+          if (timeout_ms > 0.0) {
+            sig.dim = 3;
+            sig.val.resize(sig.dim);
+            sig.coord.resize(sig.dim);
+            sig.coord[0] = "vacuum_on"; sig.val[0] = 1.0;
+            sig.coord[1] = "strength";  sig.val[1] = strength;
+            sig.coord[2] = "timeout_ms";sig.val[2] = timeout_ms;
+          } else {
+            sig.dim = 2;
+            sig.val.resize(sig.dim);
+            sig.coord.resize(sig.dim);
+            sig.coord[0] = "vacuum_on"; sig.val[0] = 1.0;
+            sig.coord[1] = "strength";  sig.val[1] = strength;
+          }
+        } else if (code == 4) {
+          // vacuum off
+          sig.dim = 1;
+          sig.val.resize(sig.dim);
+          sig.coord.resize(sig.dim);
+          sig.coord[0] = "vacuum_off"; sig.val[0] = 1.0;
+        } else {
+          // unknown/no-op
+          sig.dim = 0;
+        }
+        if (sig.dim > 0) {
+          try {
+            lcm_pub.publish(gripper_command_channel, &sig);
+          } catch (const std::exception& e) {
+            std::cerr << "Failed to publish gripper command: " << e.what() << std::endl;
+          }
+        }
+      }
     }
 
     // Optional delay for lower CPU usage
@@ -184,7 +282,7 @@ int main() {
   const auto& data = log.data();
 
   // Write all logged data points to the logger file
-  for (size_t i = 0; i < times.size(); ++i) {
+  for (size_t i = 0; i < static_cast<size_t>(times.size()); ++i) {
     logger_file << std::fixed << std::setprecision(6) << times[i] << ",";
     for (int j = 0; j < 7; ++j) {
       logger_file << std::fixed << std::setprecision(6) << data(j, i);

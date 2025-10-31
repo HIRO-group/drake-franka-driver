@@ -1,6 +1,9 @@
 #include "panda_status_drake_subscriber.h"
 
 #include "drake/common/drake_throw.h"
+#include <gflags/gflags.h>
+// Flag is defined in panda_status_drake_subscriber_main.cc
+DECLARE_bool(debug);
 
 namespace drake {
 namespace manipulation {
@@ -42,27 +45,29 @@ PandaStatusReceiver::get_torque_output_port() const {
 
 void PandaStatusReceiver::PrintStatus(const Context<double>& context) const {
   const auto& status = get_input_port().Eval<lcmt_panda_status>(context);
-  
-  std::cout << "\n=== Panda Status Message ===" << std::endl;
-  std::cout << "Number of joints: " << status.num_joints << std::endl;
-  
-  if (status.num_joints > 0) {
-    std::cout << "\nJoint Positions:" << std::endl;
-    for (int i = 0; i < status.num_joints; ++i) {
-      std::cout << "  Joint " << i << ": " << status.joint_position[i] << " rad" << std::endl;
-    }
+
+  if (FLAGS_debug) {
+    std::cout << "\n=== Panda Status Message ===" << std::endl;
+    std::cout << "Number of joints: " << status.num_joints << std::endl;
     
-    std::cout << "\nJoint Velocities:" << std::endl;
-    for (int i = 0; i < status.num_joints; ++i) {
-      std::cout << "  Joint " << i << ": " << status.joint_velocity[i] << " rad/s" << std::endl;
+    if (status.num_joints > 0) {
+      std::cout << "\nJoint Positions:" << std::endl;
+      for (int i = 0; i < status.num_joints; ++i) {
+        std::cout << "  Joint " << i << ": " << status.joint_position[i] << " rad" << std::endl;
+      }
+      
+      std::cout << "\nJoint Velocities:" << std::endl;
+      for (int i = 0; i < status.num_joints; ++i) {
+        std::cout << "  Joint " << i << ": " << status.joint_velocity[i] << " rad/s" << std::endl;
+      }
+      
+      std::cout << "\nJoint Torques:" << std::endl;
+      for (int i = 0; i < status.num_joints; ++i) {
+        std::cout << "  Joint " << i << ": " << status.joint_torque[i] << " N⋅m" << std::endl;
+      }
     }
-    
-    std::cout << "\nJoint Torques:" << std::endl;
-    for (int i = 0; i < status.num_joints; ++i) {
-      std::cout << "  Joint " << i << ": " << status.joint_torque[i] << " N⋅m" << std::endl;
-    }
+    std::cout << "==========================\n" << std::endl;
   }
-  std::cout << "==========================\n" << std::endl;
 }
 
 template <std::vector<double> lcmt_panda_status::*field_ptr>
@@ -79,28 +84,30 @@ void PandaStatusReceiver::CalcLcmOutput(
   DRAKE_THROW_UNLESS(status.num_joints == num_joints_);
   DRAKE_THROW_UNLESS(static_cast<int>(field.size()) == num_joints_);
 
-  // Print status message whenever this method is called
-  std::cout << "\n=== Panda Status Message ===" << std::endl;
-  std::cout << "Context time: " << context.get_time() << " seconds" << std::endl;
-  std::cout << "Number of joints: " << status.num_joints << std::endl;
-  
-  if (status.num_joints > 0) {
-    std::cout << "\nJoint Positions:" << std::endl;
-    for (int i = 0; i < status.num_joints; ++i) {
-      std::cout << "  Joint " << i << ": " << status.joint_position[i] << " rad" << std::endl;
-    }
+  // Print status message only when --debug is set
+  if (FLAGS_debug) {
+    std::cout << "\n=== Panda Status Message ===" << std::endl;
+    std::cout << "Context time: " << context.get_time() << " seconds" << std::endl;
+    std::cout << "Number of joints: " << status.num_joints << std::endl;
     
-    std::cout << "\nJoint Velocities:" << std::endl;
-    for (int i = 0; i < status.num_joints; ++i) {
-      std::cout << "  Joint " << i << ": " << status.joint_velocity[i] << " rad/s" << std::endl;
+    if (status.num_joints > 0) {
+      std::cout << "\nJoint Positions:" << std::endl;
+      for (int i = 0; i < status.num_joints; ++i) {
+        std::cout << "  Joint " << i << ": " << status.joint_position[i] << " rad" << std::endl;
+      }
+      
+      std::cout << "\nJoint Velocities:" << std::endl;
+      for (int i = 0; i < status.num_joints; ++i) {
+        std::cout << "  Joint " << i << ": " << status.joint_velocity[i] << " rad/s" << std::endl;
+      }
+      
+      std::cout << "\nJoint Torques:" << std::endl;
+      for (int i = 0; i < status.num_joints; ++i) {
+        std::cout << "  Joint " << i << ": " << status.joint_torque[i] << " N⋅m" << std::endl;
+      }
     }
-    
-    std::cout << "\nJoint Torques:" << std::endl;
-    for (int i = 0; i < status.num_joints; ++i) {
-      std::cout << "  Joint " << i << ": " << status.joint_torque[i] << " N⋅m" << std::endl;
-    }
+    std::cout << "==========================\n" << std::endl;
   }
-  std::cout << "==========================\n" << std::endl;
 
   output->get_mutable_value() = Eigen::Map<const Eigen::VectorXd>(
       field.data(), num_joints_);

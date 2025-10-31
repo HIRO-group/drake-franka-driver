@@ -1,0 +1,8 @@
+filegroup(
+    name = "franka_description",
+    srcs = glob(["**/*"]),
+    visibility = ["//visibility:public"],
+)
+
+
+

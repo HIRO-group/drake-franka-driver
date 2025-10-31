@@ -6,10 +6,14 @@
 #include <string>
 #include <vector>
 #include <iostream>
+#include <unordered_map>
+#include <algorithm>
 
 #include <franka/exception.h>
 #include <franka/model.h>
 #include <franka/robot.h>
+#include <franka/gripper.h>
+#include <franka/vacuum_gripper.h>
 #include <gflags/gflags.h>
 #include <lcm/lcm-cpp.hpp>
 
@@ -18,6 +22,7 @@
 #include "drake/common/text_logging.h"
 #include "drake/lcmt_panda_command.hpp"
 #include "drake/lcmt_panda_status.hpp"
+#include "drake/lcmt_drake_signal.hpp"
 #include "drake/multibody/parsing/parser.h"
 #include "drake/multibody/parsing/process_model_directives.h"
 #include "drake/multibody/plant/multibody_plant.h"
@@ -30,6 +35,8 @@ DEFINE_string(lcm_command_channel, "PANDA_COMMAND",
               "Channel to listen for lcmt_panda_command messages on");
 DEFINE_string(lcm_status_channel, "PANDA_STATUS",
               "Channel to publish lcmt_panda_status messages on");
+DEFINE_string(lcm_gripper_command_channel, "PANDA_GRIPPER_COMMAND",
+              "Channel to listen for lcmt_drake_signal gripper/vacuum commands on");
 DEFINE_double(joint_torque_limit, 100.0, "Joint torque limit");
 DEFINE_double(cartesian_force_limit, 100.0, "Cartesian force/torque limit");
 DEFINE_string(
@@ -50,6 +57,10 @@ DEFINE_double(
     "accelerations via finite differencing. Note that accelerations are "
     "filtered after being computed from *filtered* velocities.");
 
+DEFINE_bool(
+    debug, false,
+    "Enable verbose LCM debug prints in status publish.");
+
 // Options shared for any mode producing torques / generalized forces.
 DEFINE_double(
     torque_kp_scale, 1.0,
@@ -62,8 +73,8 @@ DEFINE_bool(
     "Use Drake MbP for dynamics computation, rather than Franka's inbuilt "
     "model.");
 DEFINE_string(mbp_model_runpath,
-              "drake_franka_driver/models/add_franka_control.yaml",
-              "Model file to use.");
+              "drake_franka_driver/franka_description/urdf/panda_arm.urdf",
+              "Model file (URDF) to use.");
 
 // Options for --control_mode=position --use_torque_for_position=true
 DEFINE_bool(
@@ -104,6 +115,18 @@ DEFINE_bool(
     "computed gravity terms from the desired torques. Note that "
     "--use_mbp=true means that gravity compenstation will use a Drake-"
     "supplied model. Otherwise, Franka's internal Panda model is used.");
+
+// Optional vacuum/standard gripper selection.
+DEFINE_bool(
+    vacumm, false,
+    "Use vacuum gripper instead of the standard parallel gripper when true.");
+// Alias (correct spelling) for convenience.
+DEFINE_bool(
+    vacuum, false,
+    "Alias for --vacumm; when true, use the vacuum gripper.");
+DEFINE_string(
+    gripper_ip_address, "",
+    "Optional IP address for the gripper device. Defaults to --robot_ip_address when empty.");
 
 namespace robotlocomotion {
 namespace franka_driver {
@@ -209,6 +232,7 @@ void SetGainsForJointStiffnessErrorToTorque(
 
 class PandaDriver {
  public:
+ 
   PandaDriver(
       const std::string& robot_ip_address,
       const std::string& lcm_url,
@@ -219,7 +243,9 @@ class PandaDriver {
       bool latch,
       std::unique_ptr<MultibodyPlant<double>> plant,
       uint32_t expire_usec,
-      bool remove_gravity_compensation)
+      bool remove_gravity_compensation,
+      bool use_vacuum_gripper,
+      const std::string& gripper_ip_address)
       : robot_(robot_ip_address, franka::RealtimeConfig::kIgnore),
         model_(robot_.loadModel()),
         lcm_(lcm_url),
@@ -232,7 +258,8 @@ class PandaDriver {
         remove_gravity_compensation_(remove_gravity_compensation),
         plant_(std::move(plant)),
         shm_segment_(bip::open_or_create, "torque_shared_data", 65536),  // 64KB should be enough
-        shm_(nullptr) {
+        shm_(nullptr),
+        use_vacuum_gripper_(use_vacuum_gripper) {
     drake::log()->info(
         "Connected to Panda arm version {}", robot_.serverVersion());
 
@@ -281,6 +308,12 @@ class PandaDriver {
         lcm_command_channel_, &PandaDriver::HandleCommandMessage, this);
     sub->setQueueCapacity(100);
 
+    // Gripper / vacuum command subscription via lcmt_drake_signal
+    lcm::Subscription* sub_grip = lcm_.subscribe(
+        FLAGS_lcm_gripper_command_channel,
+        &PandaDriver::HandleGripperCommand, this);
+    sub_grip->setQueueCapacity(20);
+
     // Preallocate.
     coriolis_vector_.resize(kNdof);
     inertia_matrix_.resize(kNdof, kNdof);
@@ -289,6 +322,21 @@ class PandaDriver {
       DRAKE_DEMAND(plant_->num_positions() == kNdof);
       DRAKE_DEMAND(plant_->num_velocities() == kNdof);
       context_ = plant_->CreateDefaultContext();
+    }
+
+    // Connect to either the vacuum gripper or the standard gripper based on flag.
+    const std::string selected_gripper_ip =
+        gripper_ip_address.empty() ? robot_ip_address : gripper_ip_address;
+    try {
+      if (use_vacuum_gripper_) {
+        vacuum_gripper_ = std::make_unique<franka::VacuumGripper>(selected_gripper_ip);
+        drake::log()->info("Connected to vacuum gripper at {}", selected_gripper_ip);
+      } else {
+        gripper_ = std::make_unique<franka::Gripper>(selected_gripper_ip);
+        drake::log()->info("Connected to parallel gripper at {}", selected_gripper_ip);
+      }
+    } catch (const std::exception& e) {
+      drake::log()->warn("Gripper connection failed at {}: {}", selected_gripper_ip, e.what());
     }
   }
 
@@ -514,8 +562,10 @@ class PandaDriver {
   franka::Torques DoPositionControlViaTorque(
       const franka::RobotState& state, franka::Duration period)  {
     PublishRobotState(state);
-    std::cout<<"Using DoPositionControlViaTorque"<<std::endl;
-    PrintRobotState(state);
+    if (FLAGS_debug) {
+      std::cout<<"Using DoPositionControlViaTorque"<<std::endl;
+      PrintRobotState(state);
+    }
 
     // Poll for incoming command messages.
     while (lcm_.handleTimeout(0) > 0) {}
@@ -742,6 +792,119 @@ class PandaDriver {
     command_ = *command;
   }
 
+  void HandleGripperCommand(
+      const lcm::ReceiveBuffer*, const std::string& channel,
+      const drake::lcmt_drake_signal* signal) {
+    // Debug: print incoming signal
+    try {
+      drake::log()->info("[GripperSubscriber] Received on {} dim={} ts={}",
+                         channel, signal->dim, signal->timestamp);
+      if (signal->dim > 0) {
+        std::ostringstream oss;
+        oss << "coords=[";
+        for (int i = 0; i < signal->dim; ++i) {
+          oss << signal->coord[i];
+          if (i < signal->dim - 1) oss << ", ";
+        }
+        oss << "] vals=[";
+        for (int i = 0; i < signal->dim; ++i) {
+          oss << signal->val[i];
+          if (i < signal->dim - 1) oss << ", ";
+        }
+        oss << "]";
+        drake::log()->info("[GripperSubscriber] {}", oss.str());
+      }
+    } catch (...) {
+      // ignore logging errors
+    }
+    // Build coord->value map for convenience.
+    std::unordered_map<std::string, double> values;
+    values.reserve(static_cast<size_t>(std::max(0, signal->dim)));
+    for (int i = 0; i < signal->dim; ++i) {
+      values[signal->coord[i]] = signal->val[i];
+    }
+
+    // Back-compat: accept shared-memory-style payload forwarded as lcmt_drake_signal
+    // with coords like [command_code, width, speed, ...]. If present, synthesize
+    // named flags so downstream logic works unchanged.
+    if (values.count("command_code")) {
+      const int code = static_cast<int>(values["command_code"]);
+      if (code == 1) {
+        values["open"] = 1.0;
+      } else if (code == 2) {
+        values["close"] = 1.0;
+      } else if (code == 3) {
+        values["vacuum_on"] = 1.0;
+      } else if (code == 4) {
+        values["vacuum_off"] = 1.0;
+      }
+    }
+
+    try {
+      if (use_vacuum_gripper_ && vacuum_gripper_) {
+        // Vacuum control
+        const bool vacuum_on = values.count("vacuum_on") && values["vacuum_on"] > 0.5;
+        const bool vacuum_off = values.count("vacuum_off") && values["vacuum_off"] > 0.5;
+        const int timeout_ms = values.count("timeout_ms") ? static_cast<int>(values["timeout_ms"]) : -1;
+        // strength in [0,1] if provided
+        const double strength = values.count("strength") ? values["strength"] : 1.0;
+
+        if (vacuum_on) {
+          // Best-effort API usage; adjust as needed for your libfranka version.
+          // If your VacuumGripper API differs, update these calls accordingly.
+          // Try vacuum on, fallback to stop if unsupported.
+          try {
+            if (timeout_ms > 0) {
+              vacuum_gripper_->vacuum(strength, std::chrono::milliseconds(timeout_ms));
+              drake::log()->info("Vacuum ON (strength={}, timeout_ms={})", strength, timeout_ms);
+            } else {
+              vacuum_gripper_->vacuum(strength, std::chrono::milliseconds::max());
+              drake::log()->info("Vacuum ON (strength={}, timeout=indefinite)", strength);
+            }
+          } catch (const std::exception& e) {
+            drake::log()->error("Vacuum ON command failed: {}", e.what());
+          }
+        } else if (vacuum_off) {
+          try {
+            vacuum_gripper_->stop();
+            drake::log()->info("Vacuum OFF");
+          } catch (const std::exception& e) {
+            drake::log()->error("Vacuum OFF command failed: {}", e.what());
+          }
+        }
+      } else if (gripper_) {
+        // Parallel gripper control
+        const bool open = values.count("open") && values["open"] > 0.5;
+        const bool close = values.count("close") && values["close"] > 0.5;
+        const double speed = values.count("speed") ? values["speed"] : 0.1;  // m/s
+        const double force = values.count("force") ? values["force"] : 40.0;  // N
+        const double width = values.count("width") ? values["width"] : 0.0;   // m
+        // Optional epsilon parameters are ignored for maximum compatibility
+
+        if (open) {
+          try {
+            // Open by moving to maximum width (default 0.08m unless provided)
+            const double open_width = values.count("width") ? values.at("width") : 0.08;
+            gripper_->move(open_width, speed);
+            drake::log()->info("Gripper OPEN (width={}, speed={})", open_width, speed);
+          } catch (const std::exception& e) {
+            drake::log()->error("Gripper OPEN failed: {}", e.what());
+          }
+        } else if (close) {
+          try {
+            // Use 3-argument grasp for wider libfranka compatibility
+            gripper_->grasp(width, speed, force);
+            drake::log()->info("Gripper CLOSE (width={}, speed={}, force={})", width, speed, force);
+          } catch (const std::exception& e) {
+            drake::log()->error("Gripper CLOSE failed: {}", e.what());
+          }
+        }
+      }
+    } catch (const std::exception& e) {
+      drake::log()->error("Gripper command exception: {}", e.what());
+    }
+  }
+
   void PublishRobotState(const franka::RobotState& state) {
     
     // Set stiffness frame K to base frame before reading wrench data
@@ -752,21 +915,21 @@ class PandaDriver {
     std::array<double, 16> EE_T_K = ComputeInverseTransformation(base_T_EE);
     
     // Set the stiffness frame K
-    try {
-        // robot_.setK(EE_T_K);
-        drake::log()->info("Successfully set stiffness frame K to base frame");
+    // try {
+    //     // robot_.setK(EE_T_K);
+    //     drake::log()->info("Successfully set stiffness frame K to base frame");
         
-        // Print the transformation matrix for verification
-        // std::cout << "Stiffness frame K transformation (EE to base):" << std::endl;
-        // for (int i = 0; i < 4; ++i) {
-        //     for (int j = 0; j < 4; ++j) {
-        //         std::cout << EE_T_K[i + j*4] << " ";
-        //     }
-        //     std::cout << std::endl;
-        // }
-    } catch (const franka::Exception& e) {
-        drake::log()->error("Failed to set stiffness frame K: {}", e.what());
-    }
+    //     // Print the transformation matrix for verification
+    //     // std::cout << "Stiffness frame K transformation (EE to base):" << std::endl;
+    //     // for (int i = 0; i < 4; ++i) {
+    //     //     for (int j = 0; j < 4; ++j) {
+    //     //         std::cout << EE_T_K[i + j*4] << " ";
+    //     //     }
+    //     //     std::cout << std::endl;
+    //     // }
+    // } catch (const franka::Exception& e) {
+    //     drake::log()->error("Failed to set stiffness frame K: {}", e.what());
+    // }
     
     // std::cout<<"Robot state: ["<<std::endl;
     // std::cout<<state.q[0];
@@ -876,31 +1039,40 @@ class PandaDriver {
 
     status_msg_.robot_utime = state.time.toMSec() * 1000;
     
-    // Debug printing for LCM publish
-    std::cout << "\n=== LCM Debug Info ===" << std::endl;
-    std::cout << "Publishing to LCM channel: " << lcm_status_channel_ << std::endl;
-    std::cout << "Message timestamp: " << status_msg_.utime << std::endl;
-    std::cout << "Joint positions: [";
-    for (size_t i = 0; i < status_msg_.joint_position.size(); ++i) {
+    if (FLAGS_debug) {
+      // Debug printing for LCM publish
+      std::cout << "\n=== LCM Debug Info ===" << std::endl;
+      std::cout << "Publishing to LCM channel: " << lcm_status_channel_ << std::endl;
+      std::cout << "Message timestamp: " << status_msg_.utime << std::endl;
+      std::cout << "Joint positions: [";
+      for (size_t i = 0; i < status_msg_.joint_position.size(); ++i) {
         std::cout << status_msg_.joint_position[i];
         if (i < status_msg_.joint_position.size() - 1) std::cout << ", ";
-    }
-    std::cout << "]" << std::endl;
-    
-    // Add more detailed debug info
-    std::cout << "LCM URL: " << FLAGS_lcm_url << std::endl;
-    std::cout << "Message size: " << status_msg_.getEncodedSize() << " bytes" << std::endl;
-    std::cout << "Robot mode: " << static_cast<int>(status_msg_.robot_mode) << std::endl;
-    std::cout << "Control success rate: " << status_msg_.control_command_success_rate << std::endl;
-    
-    try {
+      }
+      std::cout << "]" << std::endl;
+
+      // Add more detailed debug info
+      std::cout << "LCM URL: " << FLAGS_lcm_url << std::endl;
+      std::cout << "Message size: " << status_msg_.getEncodedSize() << " bytes" << std::endl;
+      std::cout << "Robot mode: " << static_cast<int>(status_msg_.robot_mode) << std::endl;
+      std::cout << "Control success rate: " << status_msg_.control_command_success_rate << std::endl;
+
+      try {
         std::cout << "Attempting to publish message..." << std::endl;
         lcm_.publish(lcm_status_channel_, &status_msg_);
         std::cout << "Successfully published message" << std::endl;
-    } catch (const std::exception& e) {
+      } catch (const std::exception& e) {
         std::cerr << "Error publishing message: " << e.what() << std::endl;
+      }
+      std::cout << "=== End LCM Debug Info ===\n" << std::endl;
+    } else {
+      // Publish without verbose console output
+      try {
+        lcm_.publish(lcm_status_channel_, &status_msg_);
+      } catch (const std::exception& e) {
+        std::cerr << "Error publishing message: " << e.what() << std::endl;
+      }
     }
-    std::cout << "=== End LCM Debug Info ===\n" << std::endl;
   }
 
   franka::Robot robot_;
@@ -935,6 +1107,11 @@ class PandaDriver {
   // Shared memory members
   bip::managed_shared_memory shm_segment_;
   SharedMemoryData* shm_;
+  
+  // Gripper selection and handles
+  bool use_vacuum_gripper_{};
+  std::unique_ptr<franka::Gripper> gripper_;
+  std::unique_ptr<franka::VacuumGripper> vacuum_gripper_;
 };
 
 // N.B. Using a resource path allows us to locate
@@ -956,10 +1133,13 @@ std::unique_ptr<MultibodyPlant<double>> MaybeLoadPlant() {
   const double time_step = 0.0;
   auto plant = std::make_unique<MultibodyPlant<double>>(time_step);
   drake::multibody::Parser parser(plant.get());
-  drake::multibody::parsing::ModelDirectives directives = 
-        drake::multibody::parsing::LoadModelDirectives(model_file);
-  drake::multibody::parsing::ProcessModelDirectives(directives, plant.get(), 
-                                                nullptr, &parser);
+  const std::vector<drake::multibody::ModelInstanceIndex> model_indices =
+      parser.AddModelsFromUrl(std::string("file://") + model_file);
+  DRAKE_DEMAND(!model_indices.empty());
+  const drake::multibody::ModelInstanceIndex panda_model = model_indices.front();
+  plant->WeldFrames(
+      plant->world_frame(),
+      plant->GetFrameByName("panda_link0", panda_model));
   plant->Finalize();
   return plant;
 }
@@ -987,7 +1167,9 @@ int DoMain() {
       FLAGS_latch,
       MaybeLoadPlant(),
       expire_usec,
-      FLAGS_remove_gravity_compensation);
+      FLAGS_remove_gravity_compensation,
+      (FLAGS_vacumm || FLAGS_vacuum),
+      FLAGS_gripper_ip_address);
 
   driver.ControlLoop(mode);
 

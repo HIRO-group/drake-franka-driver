@@ -1,102 +1,161 @@
-# -*- python -*-
-
-load("//tools/lint:lint.bzl", "add_lint_tests")
+load("@com_github_mvukov_rules_ros2//ros2:bag.bzl", "ros2_bag")
+load("@com_github_mvukov_rules_ros2//ros2:cc_defs.bzl", "ros2_cpp_binary")
+load("@com_github_mvukov_rules_ros2//ros2:launch.bzl", "ros2_launch")
+load("@com_github_mvukov_rules_ros2//ros2:topic.bzl", "ros2_topic")
+load("@rules_python//python:defs.bzl", "py_binary")
 
 package(default_visibility = ["//visibility:public"])
 
+# ---------------------------------------------------------------------------
+# Franka driver binaries
+# ---------------------------------------------------------------------------
+
 cc_binary(
     name = "franka_driver_v5",
-    srcs = [
-        "franka_driver.cc",
-    ],
+    srcs = ["franka_driver.cc"],
     deps = [
         ":shared_memory_lib",
         "@drake//common:common",
         "@drake//lcmtypes:panda",
         "@drake//multibody/plant",
         "@drake//multibody/parsing:parsing",
-        "@gflags",
-        "@lcm",
-        "@libfranka_v5",
+        "@gflags_sys//:gflags",
+        "@lcm_sys//:lcm",
+        "@drake//lcmtypes:drake_signal",
+        "@libfranka_v5//:libfranka",
     ],
     data = [
-        "//models:franka_control_models",
-        "@drake//manipulation/models/franka_description:models",
+        "//franka_description:franka_description",
+        "//urdf_location:franka_urdf_models",
     ],
 )
 
 cc_binary(
     name = "franka_driver_v4",
-    srcs = [
-        "franka_driver.cc",
-    ],
+    srcs = ["franka_driver.cc"],
     deps = [
         ":shared_memory_lib",
         "@drake//common:common",
         "@drake//lcmtypes:panda",
         "@drake//multibody/plant",
         "@drake//multibody/parsing:parsing",
-        "@gflags",
-        "@lcm",
-        "@libfranka_v4",
+        "@gflags_sys//:gflags",
+        "@lcm_sys//:lcm",
+        "@drake//lcmtypes:drake_signal",
+        "@libfranka_v4//:libfranka",
     ],
     data = [
-        "//models:franka_control_models",
-        "@drake//manipulation/models/franka_description:models",
+        "//franka_description:franka_description",
+        "//urdf_location:franka_urdf_models",
     ],
 )
 
 cc_binary(
     name = "franka_hand_driver_v5",
-    srcs = [
-        "franka_hand_driver.cc",
-    ],
+    srcs = ["franka_hand_driver.cc"],
     deps = [
         "@drake//common:common",
         "@drake//lcmtypes:panda",
         "@drake//lcmtypes:schunk",
-        "@gflags",
-        "@lcm",
-        "@libfranka_v5",
+        "@gflags_sys//:gflags",
+        "@lcm_sys//:lcm",
+        "@libfranka_v5//:libfranka",
     ],
     data = [
-        "//models:franka_control_models",
-        "@drake//manipulation/models/franka_description:models",
+        "//franka_description:franka_description",
     ],
 )
 
 cc_binary(
     name = "franka_hand_driver_v4",
-    srcs = [
-        "franka_hand_driver.cc",
-    ],
+    srcs = ["franka_hand_driver.cc"],
     deps = [
         "@drake//common:common",
         "@drake//lcmtypes:panda",
         "@drake//lcmtypes:schunk",
-        "@gflags",
-        "@lcm",
-        "@libfranka_v4",
+        "@gflags_sys//:gflags",
+        "@lcm_sys//:lcm",
+        "@libfranka_v4//:libfranka",
     ],
     data = [
-        "//models:franka_control_models",
-        "@drake//manipulation/models/franka_description:models",
+        "//franka_description:franka_description",
     ],
 )
 
+# ---------------------------------------------------------------------------
+# Simple LCM subscriber
+# ---------------------------------------------------------------------------
+
 cc_binary(
     name = "panda_status_subscriber",
-    srcs = [
-        "panda_status_subscriber.cc",
-    ],
+    srcs = ["panda_status_subscriber.cc"],
     deps = [
         "@drake//lcmtypes:panda",
-        "@lcm",
+        "@lcm_sys//:lcm",
     ],
 )
+
+# ---------------------------------------------------------------------------
+# Drake + ROS 2 subscriber main
+# ---------------------------------------------------------------------------
+
 cc_binary(
     name = "panda_status_drake_subscriber_main",
     srcs = ["panda_status_drake_subscriber_main.cc"],
+    deps = [
+        ":shared_memory_lib",
+        ":panda_status_drake_subscriber",
+        "@gflags_sys//:gflags",
+        "@drake//systems/lcm:lcm_subscriber_system",
+        "@drake//systems/lcm:lcm_interface_system",
+        "@drake//systems/analysis:simulator",
+        "@drake//systems/framework:diagram_builder",
+        "@drake//systems/framework:leaf_system",
+        "@drake//systems/framework:framework",
+        "@drake//systems/framework:context",
+        "@drake//systems/primitives:vector_log_sink",
+        "@drake//multibody/parsing:parser",
+        "@drake//multibody/plant:plant",
+        "@drake//multibody/tree:tree",
+        "@drake//lcmtypes:panda",
+        "@drake//lcmtypes:drake_signal",
+        "@drake//lcm:drake_lcm",
+        "@drake//lcm:lcm",
+        "@ros2_rclcpp//:rclcpp",
+    ],
+)
+
+# ---------------------------------------------------------------------------
+# Supporting libraries
+# ---------------------------------------------------------------------------
+
+cc_library(
+    name = "panda_status_drake_subscriber",
+    srcs = ["panda_status_drake_subscriber.cc"],
+    hdrs = ["panda_status_drake_subscriber.h"],
+    deps = [
+        "@gflags_sys//:gflags",
+        "@drake//systems/framework:leaf_system",
+        "@drake//systems/framework:framework",
+        "@drake//systems/framework:context",
+        "@drake//lcmtypes:panda",
+    ],
+)
+
+cc_library(
+    name = "shared_memory_lib",
+    hdrs = ["shared_memory.hpp"],
+    includes = ["."],
+    visibility = ["//visibility:public"],
+)
+
+# ---------------------------------------------------------------------------
+# Shared-memory Panda example
+# ---------------------------------------------------------------------------
+
+cc_binary(
+    name = "shared_mem_panda",
+    srcs = ["shared_mem_panda.cpp"],
     deps = [
         ":shared_memory_lib",
         ":panda_status_drake_subscriber",
@@ -117,47 +176,3 @@ cc_binary(
     ],
 )
 
-cc_library(
-    name = "panda_status_drake_subscriber",
-    srcs = ["panda_status_drake_subscriber.cc"],
-    hdrs = ["panda_status_drake_subscriber.h"],
-    deps = [
-        "@drake//systems/framework:leaf_system",
-        "@drake//systems/framework:framework",
-        "@drake//systems/framework:context",
-        "@drake//lcmtypes:panda",
-    ],
-)
-cc_library(
-    name = "shared_memory_lib",
-    hdrs = ["shared_memory.hpp"],
-    includes = ["."],  # optional if header is in the same dir
-    visibility = ["//visibility:public"],
-)
-
-cc_binary(
-    name = "shared_mem_panda",
-    srcs = ["shared_mem_panda.cpp"],
-    deps = [
-        ":shared_memory_lib",
-        ":panda_status_drake_subscriber",  # If it uses PandaStatusReceiver
-        "@drake//systems/lcm:lcm_subscriber_system",
-        "@drake//systems/lcm:lcm_interface_system",
-        "@drake//systems/analysis:simulator",
-        "@drake//systems/framework:diagram_builder",
-        "@drake//systems/framework:leaf_system",
-        "@drake//systems/framework:framework",
-        "@drake//systems/framework:context",
-        "@drake//systems/primitives:vector_log_sink",
-        "@drake//multibody/parsing:parser",
-        "@drake//multibody/plant:plant",
-        "@drake//multibody/tree:tree",
-        "@drake//lcmtypes:panda",
-        "@drake//lcm:drake_lcm",
-        "@drake//lcm:lcm",
-
-    ],
-)
-
-
-add_lint_tests()

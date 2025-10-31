@@ -1,0 +1,128 @@
+module(
+    name = "drake_franka_driver",
+    version = "0.0.0",
+    bazel_compatibility = [
+        ">=7.4.1",
+        "<=8.4.2",
+    ],
+)
+
+# Core rules
+bazel_dep(name = "bazel_skylib", version = "1.8.2")  # <- bump to silence warning
+bazel_dep(name = "rules_python", version = "1.6.3")
+bazel_dep(name = "bazel_features", version = "1.30.0")
+
+# Drake (archive_override like the ROS example)
+DRAKE_COMMIT = "v1.43.0"
+
+DRAKE_CHECKSUM = "635c125187c6758b1bfc7698b59f6f9bfc64a902575e191cccce74be8c6f47ee"
+
+bazel_dep(name = "drake")
+archive_override(
+    module_name = "drake",
+    sha256 = DRAKE_CHECKSUM,
+    strip_prefix = "drake-{}".format(DRAKE_COMMIT.lstrip("v")),
+    urls = ["https://github.com/RobotLocomotion/drake/archive/{}.tar.gz".format(DRAKE_COMMIT)],
+)
+
+drake_dep_repositories = use_extension(
+    "@drake//tools/workspace:default.bzl",
+    "drake_dep_repositories",
+)
+use_repo(drake_dep_repositories, "pycodestyle", "styleguide")
+
+# rules_ros2 (your pins)
+bazel_dep(name = "com_github_mvukov_rules_ros2", version = "0.0.0")
+git_override(
+    module_name = "com_github_mvukov_rules_ros2",
+    commit = "4710585558693b62bdab089ca3d0f050b765c819",
+    remote = "https://github.com/mvukov/rules_ros2.git",
+)
+
+rules_ros2_non_module_deps = use_extension(
+    "@com_github_mvukov_rules_ros2//ros2:extensions.bzl",
+    "non_module_deps",
+)
+use_repo(
+    rules_ros2_non_module_deps,
+    "cyclonedds",
+    "foxglove_bridge",
+    "iceoryx",
+    "osrf_pycommon",
+    "ros2",
+    "ros2_ament_index",
+    "ros2_class_loader",
+    "ros2_common_interfaces",
+    "ros2_diagnostics",
+    "ros2_geometry2",
+    "ros2_image_common",
+    "ros2_kdl_parser",
+    "ros2_keyboard_handler",
+    "ros2_launch",
+    "ros2_launch_ros",
+    "ros2_libstatistics_collector",
+    "ros2_message_filters",
+    "ros2_pluginlib",
+    "ros2_rcl",
+    "ros2_rcl_interfaces",
+    "ros2_rcl_logging",
+    "ros2_rclcpp",
+    "ros2_rclpy",
+    "ros2_rcpputils",
+    "ros2_rcutils",
+    "ros2_resource_retriever",
+    "ros2_rmw",
+    "ros2_rmw_cyclonedds",
+    "ros2_rmw_dds_common",
+    "ros2_rmw_implementation",
+    "ros2_robot_state_publisher",
+    "ros2_rosbag2",
+    "ros2_rosidl",
+    "ros2_rosidl_python",
+    "ros2_rosidl_runtime_py",
+    "ros2_rosidl_typesupport",
+    "ros2_rpyutils",
+    "ros2_rust",
+    "ros2_tracing",
+    "ros2_unique_identifier_msgs",
+    "ros2_urdfdom",
+    "ros2_urdfdom_headers",
+    "ros2_xacro",
+    "ros2cli",
+    "rules_ros2_config_clang",
+)
+
+# Python toolchain
+python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+python.toolchain(python_version = "3.10")
+
+# ===== System externals as repos (Bzlmod-safe) =====
+lcm_repo_rule = use_repo_rule("//:externals_ext.bzl", "lcm_repo")
+
+lcm_repo_rule(name = "lcm_sys")
+
+libfranka_repo_rule = use_repo_rule("//:externals_ext.bzl", "libfranka_repo")
+
+libfranka_repo_rule(name = "libfranka_v4")
+
+libfranka_repo_rule(name = "libfranka_v5")
+
+gflags_repo_rule = use_repo_rule("//:externals_ext.bzl", "gflags_repo")
+
+gflags_repo_rule(name = "gflags_sys")
+
+# === RobotLocomotion/models via http_archive (non-modular repo) ===
+# Get http_archive as a repo rule inside Bzlmod.
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+# Create the repository with the nice name you actually want to use.
+http_archive(
+    name = "robotlocomotion_models",                 # this is the repo name you want
+    strip_prefix = "models-master",
+    urls = ["https://github.com/RobotLocomotion/models/archive/refs/heads/master.zip"],
+    build_file_content = """
+package(default_visibility = ["//visibility:public"])
+filegroup(name = "franka_description", srcs = glob(["franka_description/**"]))
+""",
+)
+

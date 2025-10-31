@@ -1,0 +1,7 @@
+directives:
+- add_model:
+    name: panda
+    file: ../franka_description/urdf/panda_arm.urdf
+- add_weld:
+    parent: world
+    child: panda::panda_link0

@@ -1,0 +1,10 @@
+filegroup(
+    name = "franka_urdf_models",
+    srcs = [
+        "add_franka_urdf.yaml",
+    ],
+    data = [
+        "//franka_description:franka_description",
+    ],
+    visibility = ["//visibility:public"],
+)
