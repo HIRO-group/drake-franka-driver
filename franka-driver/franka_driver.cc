@@ -8,6 +8,10 @@
 #include <iostream>
 #include <unordered_map>
 #include <algorithm>
+#include <thread>
+#include <queue>
+#include <mutex>
+#include <condition_variable>
 
 #include <franka/exception.h>
 #include <franka/model.h>
@@ -210,6 +214,22 @@ std::string PrintRobotState(const franka::RobotState& state) {
   return str_rep;
 }
 
+// Configure conservative default behaviors for collisions and impedances.
+// Called once after the robot connection is established.
+void SetDefaultBehavior(franka::Robot& robot) {
+  robot.setCollisionBehavior(
+      {{20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0}},
+      {{20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0}},
+      {{10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0}},
+      {{10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0}},
+      {{20.0, 20.0, 20.0, 20.0, 20.0, 20.0}},
+      {{20.0, 20.0, 20.0, 20.0, 20.0, 20.0}},
+      {{10.0, 10.0, 10.0, 10.0, 10.0, 10.0}},
+      {{10.0, 10.0, 10.0, 10.0, 10.0, 10.0}});
+  robot.setJointImpedance({{3000, 3000, 3000, 2500, 2500, 2000, 2000}});
+  robot.setCartesianImpedance({{3000, 3000, 3000, 300, 300, 300}});
+}
+
 void SetGainsForJointStiffnessErrorToTorque(
     Eigen::VectorXd* kp, Eigen::VectorXd* kd) {
   DRAKE_DEMAND(kp != nullptr || kd != nullptr);
@@ -257,7 +277,7 @@ class PandaDriver {
         cartesian_force_limit_(cartesian_force_limit),
         remove_gravity_compensation_(remove_gravity_compensation),
         plant_(std::move(plant)),
-        shm_segment_(bip::open_or_create, "torque_shared_data", 65536),  // 64KB should be enough
+        shm_segment_(bip::open_or_create, "MySharedMemory", 65536),  // Align with simulation segment name
         shm_(nullptr),
         use_vacuum_gripper_(use_vacuum_gripper) {
     drake::log()->info(
@@ -265,6 +285,7 @@ class PandaDriver {
 
     // Try to find existing shared memory data, or create it if it doesn't exist
     try {
+        drake::log()->info("Using shared memory segment: MySharedMemory (object: SharedData)");
         shm_ = shm_segment_.find<SharedMemoryData>("SharedData").first;
         if (shm_ == nullptr) {
             // Create the shared memory data if it doesn't exist
@@ -278,6 +299,14 @@ class PandaDriver {
     } catch (const std::exception& e) {
         drake::log()->warn("Shared memory initialization failed: {}", e.what());
         shm_ = nullptr;
+    }
+
+    // Apply default behavior (collision thresholds and impedances).
+    try {
+      SetDefaultBehavior(robot_);
+      drake::log()->info("Applied default collision and impedance behavior");
+    } catch (const std::exception& e) {
+      drake::log()->warn("Failed to set default behavior: {}", e.what());
     }
 
     const auto state = robot_.readOnce();
@@ -338,6 +367,10 @@ class PandaDriver {
     } catch (const std::exception& e) {
       drake::log()->warn("Gripper connection failed at {}: {}", selected_gripper_ip, e.what());
     }
+
+    // Start background worker for gripper commands (non-RT)
+    gripper_worker_ = std::thread(&PandaDriver::GripperWorkerLoop, this);
+    gripper_worker_.detach();
   }
 
   void ControlLoop(ControlMode mode) {
@@ -405,6 +438,9 @@ class PandaDriver {
   bool DoStateRead(const franka::RobotState& state) {
     PublishRobotState(state);
 
+    // Poll shared memory for gripper commands (LCM-free path)
+    MaybeHandleGripperFromSharedMemory();
+
     if (is_first_tick_) {
       is_first_tick_ = false;
     }
@@ -463,6 +499,9 @@ class PandaDriver {
     // Poll for incoming command messages.
     while (lcm_.handleTimeout(0) > 0) {}
 
+    // Also poll shared memory for gripper commands
+    MaybeHandleGripperFromSharedMemory();
+
     if (!command_ && latch_) {
       command_ = command_prev_;
     }
@@ -511,6 +550,9 @@ class PandaDriver {
 
     // Poll for incoming command messages.
     while (lcm_.handleTimeout(0) > 0) {}
+
+    // Also poll shared memory for gripper commands
+    MaybeHandleGripperFromSharedMemory();
 
     if (!command_ && latch_) {
       command_ = command_prev_;
@@ -569,6 +611,9 @@ class PandaDriver {
 
     // Poll for incoming command messages.
     while (lcm_.handleTimeout(0) > 0) {}
+
+    // Also poll shared memory for gripper commands
+    MaybeHandleGripperFromSharedMemory();
 
     const double dt = period.toSec();
     if (is_first_tick_) {
@@ -726,6 +771,9 @@ class PandaDriver {
     // Poll for incoming command messages.
     while (lcm_.handleTimeout(0) > 0) {}
 
+    // Also poll shared memory for gripper commands
+    MaybeHandleGripperFromSharedMemory();
+
     if (!command_ && latch_) {
       command_ = command_prev_;
     }
@@ -797,8 +845,8 @@ class PandaDriver {
       const drake::lcmt_drake_signal* signal) {
     // Debug: print incoming signal
     try {
-      drake::log()->info("[GripperSubscriber] Received on {} dim={} ts={}",
-                         channel, signal->dim, signal->timestamp);
+      // drake::log()->info("[GripperSubscriber] Received on {} dim={} ts={}",
+      //                    channel, signal->dim, signal->timestamp);
       if (signal->dim > 0) {
         std::ostringstream oss;
         oss << "coords=[";
@@ -812,7 +860,7 @@ class PandaDriver {
           if (i < signal->dim - 1) oss << ", ";
         }
         oss << "]";
-        drake::log()->info("[GripperSubscriber] {}", oss.str());
+        // drake::log()->info("[GripperSubscriber] {}", oss.str());
       }
     } catch (...) {
       // ignore logging errors
@@ -840,61 +888,63 @@ class PandaDriver {
       }
     }
 
+    EnqueueGripperCommand(values);
+  }
+
+  // Execute a gripper action based on parsed name->value map
+  void ExecuteGripperCommandValues(const std::unordered_map<std::string, double>& values) {
     try {
       if (use_vacuum_gripper_ && vacuum_gripper_) {
-        // Vacuum control
-        const bool vacuum_on = values.count("vacuum_on") && values["vacuum_on"] > 0.5;
-        const bool vacuum_off = values.count("vacuum_off") && values["vacuum_off"] > 0.5;
-        const int timeout_ms = values.count("timeout_ms") ? static_cast<int>(values["timeout_ms"]) : -1;
-        // strength in [0,1] if provided
-        const double strength = values.count("strength") ? values["strength"] : 1.0;
+        const bool vacuum_on = values.count("vacuum_on") && values.at("vacuum_on") > 0.5;
+        const bool vacuum_off = values.count("vacuum_off") && values.at("vacuum_off") > 0.5;
+        const int timeout_ms = values.count("timeout_ms") ? static_cast<int>(values.at("timeout_ms")) : -1;
+        const double strength = values.count("strength") ? values.at("strength") : 1.0;
+
+        // Debounce repeated vacuum commands and gate by last known state
+        const auto now = std::chrono::steady_clock::now();
+        const auto since_last = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_vacuum_cmd_time_).count();
+        const int kDebounceMs = 300;  // ignore duplicate vacuum cmds within 300ms
 
         if (vacuum_on) {
-          // Best-effort API usage; adjust as needed for your libfranka version.
-          // If your VacuumGripper API differs, update these calls accordingly.
-          // Try vacuum on, fallback to stop if unsupported.
+          if (vacuum_state_ == VacuumState::On) {
+            drake::log()->info("[SHM] Ignore vacuum_on (already ON)");
+            return;
+          }
+          if (since_last < kDebounceMs) {
+            drake::log()->info("[SHM] Ignore vacuum_on (debounced {}ms)", since_last);
+            return;
+          }
           try {
             if (timeout_ms > 0) {
               vacuum_gripper_->vacuum(strength, std::chrono::milliseconds(timeout_ms));
-              drake::log()->info("Vacuum ON (strength={}, timeout_ms={})", strength, timeout_ms);
             } else {
               vacuum_gripper_->vacuum(strength, std::chrono::milliseconds::max());
-              drake::log()->info("Vacuum ON (strength={}, timeout=indefinite)", strength);
             }
-          } catch (const std::exception& e) {
-            drake::log()->error("Vacuum ON command failed: {}", e.what());
-          }
+            vacuum_state_ = VacuumState::On;
+            last_vacuum_cmd_time_ = now;
+          } catch (const std::exception&) {}
         } else if (vacuum_off) {
-          try {
-            vacuum_gripper_->stop();
-            drake::log()->info("Vacuum OFF");
-          } catch (const std::exception& e) {
-            drake::log()->error("Vacuum OFF command failed: {}", e.what());
-          }
+          // Always attempt to stop; stop() is idempotent and cheap.
+          try { vacuum_gripper_->stop(); } catch (const std::exception&) {}
+          vacuum_state_ = VacuumState::Off;
+          last_vacuum_cmd_time_ = now;
         }
       } else if (gripper_) {
-        // Parallel gripper control
-        const bool open = values.count("open") && values["open"] > 0.5;
-        const bool close = values.count("close") && values["close"] > 0.5;
-        const double speed = values.count("speed") ? values["speed"] : 0.1;  // m/s
-        const double force = values.count("force") ? values["force"] : 40.0;  // N
-        const double width = values.count("width") ? values["width"] : 0.0;   // m
-        // Optional epsilon parameters are ignored for maximum compatibility
-
+        const bool open = values.count("open") && values.at("open") > 0.5;
+        const bool close = values.count("close") && values.at("close") > 0.5;
+        const double speed = values.count("speed") ? values.at("speed") : 0.1;
+        const double force = values.count("force") ? values.at("force") : 40.0;
+        const double width = values.count("width") ? values.at("width") : 0.0;
         if (open) {
           try {
-            // Open by moving to maximum width (default 0.08m unless provided)
             const double open_width = values.count("width") ? values.at("width") : 0.08;
             gripper_->move(open_width, speed);
-            drake::log()->info("Gripper OPEN (width={}, speed={})", open_width, speed);
           } catch (const std::exception& e) {
             drake::log()->error("Gripper OPEN failed: {}", e.what());
           }
         } else if (close) {
           try {
-            // Use 3-argument grasp for wider libfranka compatibility
             gripper_->grasp(width, speed, force);
-            drake::log()->info("Gripper CLOSE (width={}, speed={}, force={})", width, speed, force);
           } catch (const std::exception& e) {
             drake::log()->error("Gripper CLOSE failed: {}", e.what());
           }
@@ -902,6 +952,116 @@ class PandaDriver {
       }
     } catch (const std::exception& e) {
       drake::log()->error("Gripper command exception: {}", e.what());
+    }
+  }
+
+  // Poll and consume shared-memory gripper command (if any), then execute
+  void MaybeHandleGripperFromSharedMemory() {
+    if (shm_ == nullptr) return;
+    try {
+      bip::scoped_lock<bip::interprocess_mutex> lock(shm_->mutex);
+      if (!shm_->gripper_cmd_ready || shm_->gripper_cmd.empty()) return;
+
+      const auto& cmd = shm_->gripper_cmd;
+      auto get = [&cmd](size_t i) -> double { return i < cmd.size() ? cmd[i] : 0.0; };
+      const int code = static_cast<int>(get(0));
+      // Log receipt of a shared-memory gripper command
+      try {
+        drake::log()->info(
+            "[SHM] Gripper cmd ready: code={} width={} speed={} force={} eps_in={} eps_out={} strength={} timeout_ms={}",
+            code, get(1), get(2), get(3), get(4), get(5), get(6), static_cast<int>(get(7)));
+      } catch (...) {}
+      std::unordered_map<std::string, double> values;
+      if (code == 1) { values["open"] = 1.0; }
+      else if (code == 2) { values["close"] = 1.0; }
+      else if (code == 3) { values["vacuum_on"] = 1.0; }
+      else if (code == 4) { values["vacuum_off"] = 1.0; }
+      values["width"] = get(1);
+      values["speed"] = get(2);
+      values["force"] = get(3);
+      values["eps_inner"] = get(4);
+      values["eps_outer"] = get(5);
+      values["strength"] = get(6);
+      values["timeout_ms"] = get(7);
+
+      // Enqueue for background execution (avoid blocking the control loop)
+      EnqueueGripperCommand(values);
+      shm_->gripper_cmd_ready = false;
+      shm_->gripper_cmd.clear();
+    } catch (const std::exception& e) {
+      drake::log()->warn("Shared memory gripper poll failed: {}", e.what());
+    }
+  }
+
+  // Background gripper execution support
+  enum class GripperOpType { None, Open, Close, VacuumOn, VacuumOff };
+  struct GripperOp {
+    GripperOpType type{GripperOpType::None};
+    double width{0.0};
+    double speed{0.1};
+    double force{40.0};
+    double eps_inner{0.005};
+    double eps_outer{0.005};
+    double strength{1.0};
+    int timeout_ms{-1};
+  };
+
+  void EnqueueGripperCommand(const std::unordered_map<std::string, double>& values) {
+    GripperOp op;
+    if (values.count("open")) op.type = GripperOpType::Open;
+    else if (values.count("close")) op.type = GripperOpType::Close;
+    else if (values.count("vacuum_on")) op.type = GripperOpType::VacuumOn;
+    else if (values.count("vacuum_off")) op.type = GripperOpType::VacuumOff;
+    op.width = values.count("width") ? values.at("width") : 0.0;
+    op.speed = values.count("speed") ? values.at("speed") : 0.1;
+    op.force = values.count("force") ? values.at("force") : 40.0;
+    op.eps_inner = values.count("eps_inner") ? values.at("eps_inner") : 0.005;
+    op.eps_outer = values.count("eps_outer") ? values.at("eps_outer") : 0.005;
+    op.strength = values.count("strength") ? values.at("strength") : 1.0;
+    op.timeout_ms = values.count("timeout_ms") ? static_cast<int>(values.at("timeout_ms")) : -1;
+    {
+      std::lock_guard<std::mutex> lk(gripper_mutex_);
+      gripper_queue_.push(op);
+    }
+    gripper_cv_.notify_one();
+  }
+
+  void GripperWorkerLoop() {
+    while (true) {
+      GripperOp op;
+      {
+        std::unique_lock<std::mutex> lk(gripper_mutex_);
+        gripper_cv_.wait_for(lk, std::chrono::milliseconds(50), [&]{ return !gripper_queue_.empty(); });
+        if (gripper_queue_.empty()) {
+          continue;
+        }
+        op = gripper_queue_.front();
+        gripper_queue_.pop();
+      }
+
+      // Convert to values map and reuse gating/execution in ExecuteGripperCommandValues
+      std::unordered_map<std::string, double> values;
+      switch (op.type) {
+        case GripperOpType::Open: values["open"] = 1.0; break;
+        case GripperOpType::Close: values["close"] = 1.0; break;
+        case GripperOpType::VacuumOn: values["vacuum_on"] = 1.0; break;
+        case GripperOpType::VacuumOff: values["vacuum_off"] = 1.0; break;
+        default: break;
+      }
+      values["width"] = op.width;
+      values["speed"] = op.speed;
+      values["force"] = op.force;
+      values["eps_inner"] = op.eps_inner;
+      values["eps_outer"] = op.eps_outer;
+      values["strength"] = op.strength;
+      values["timeout_ms"] = op.timeout_ms;
+
+      try {
+        ExecuteGripperCommandValues(values);
+        drake::log()->info("[SHM] Executed gripper command (bg thread)");
+      } catch (const std::exception& e) {
+        drake::log()->warn("[SHM] Gripper worker command failed: {}", e.what());
+      }
     }
   }
 
@@ -1112,6 +1272,17 @@ class PandaDriver {
   bool use_vacuum_gripper_{};
   std::unique_ptr<franka::Gripper> gripper_;
   std::unique_ptr<franka::VacuumGripper> vacuum_gripper_;
+
+  // Vacuum command gating
+  enum class VacuumState { Unknown, On, Off };
+  VacuumState vacuum_state_{VacuumState::Unknown};
+  std::chrono::steady_clock::time_point last_vacuum_cmd_time_{};
+
+  // Background gripper worker
+  std::queue<GripperOp> gripper_queue_;
+  std::mutex gripper_mutex_;
+  std::condition_variable gripper_cv_;
+  std::thread gripper_worker_;
 };
 
 // N.B. Using a resource path allows us to locate
