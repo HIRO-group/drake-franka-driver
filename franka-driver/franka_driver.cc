@@ -245,7 +245,8 @@ void SetGainsForJointStiffnessErrorToTorque(
   }
   if (kd != nullptr) {
     DRAKE_DEMAND(kd->size() == kNdof);
-    *kd << 8.,8.,8.,5.,2.,2.,1.;
+    // *kd << 8.,8.,8.,5.,2.,2.,1.;
+    *kd << 15.,15.,15.,9.,2.,2.,1.;
     *kd *= FLAGS_torque_kd_scale;
   }
 }
