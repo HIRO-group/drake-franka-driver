@@ -176,3 +176,18 @@ cc_binary(
     ],
 )
 
+# ---------------------------------------------------------------------------
+# LCM to ROS 2 Bridge
+# ---------------------------------------------------------------------------
+
+cc_binary(
+    name = "lcm_ros2_bridge",
+    srcs = ["lcm_ros2_bridge.cc"],
+    deps = [
+        "@drake//lcmtypes:panda",
+        "@lcm_sys//:lcm",
+        "@ros2_rclcpp//:rclcpp",
+        "@ros2_common_interfaces//:cpp_sensor_msgs",
+    ],
+)
+
