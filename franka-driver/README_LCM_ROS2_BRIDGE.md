@@ -39,31 +39,36 @@ The binary will be at: `bazel-bin/franka-driver/lcm_ros2_bridge`
 
 **Terminal 2: Run the bridge**
 ```bash
-# Source ROS 2
-source ros_humble/setup.bash
-
-# Run bridge
-./bazel-bin/franka-driver/lcm_ros2_bridge
+# Set RMW middleware and run bridge via bazel
+cd /home/yaashiagautam/drake-franka-driver
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+bazel run //franka-driver:lcm_ros2_bridge
 ```
 
 **Terminal 3: Verify ROS topics**
 ```bash
-source ros_humble/setup.bash
-ros2 topic list
-ros2 topic echo /franka/joint_states
+# Must cd into ros_humble directory for setup scripts to work
+cd /home/yaashiagautam/drake-franka-driver/ros_humble
+bash -c "source setup.bash && export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && ros2 topic list"
+bash -c "source setup.bash && export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && ros2 topic echo /franka/joint_states"
 ```
+
+> **Note**: Run the bridge with `bazel run` instead of directly executing the binary. This ensures Bazel sets up the runtime library paths correctly for ROS 2 shared libraries.
 
 ### Advanced: Custom Parameters
 
 Run with custom LCM URL or topic names:
 
 ```bash
-./bazel-bin/franka-driver/lcm_ros2_bridge \
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+bazel run //franka-driver:lcm_ros2_bridge -- \
   --ros-args \
   -p lcm_url:="udpm://239.255.76.67:7667?ttl=0" \
   -p lcm_channel:="PANDA_STATUS" \
   -p ros_topic:="/robot/joint_states"
 ```
+
+> **Note**: The `--` separator is required to pass arguments to the binary when using `bazel run`.
 
 ## Parameters
 
@@ -133,17 +138,39 @@ route -n | grep 239.255.76.67
 
 ### ROS topics not visible
 
-Ensure ROS 2 environment is sourced:
+The bundled `ros_humble/setup.bash` requires being run from within the `ros_humble` directory. Use this pattern:
+
 ```bash
-source /home/yaashiagautam/drake-franka-driver/ros_humble/setup.bash
+cd /home/yaashiagautam/drake-franka-driver/ros_humble
+bash -c "source setup.bash && export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && ros2 topic list"
+```
+
+Alternatively, if you have ROS 2 Humble installed system-wide:
+```bash
+source /opt/ros/humble/setup.bash
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 ros2 topic list
 ```
 
 ### Build errors
 
-Ensure ROS 2 Bazel rules are configured. Check `WORKSPACE` or `MODULE.bazel` for:
+**Missing `ros2_sensor_msgs` repository**: The correct dependency is `@ros2_common_interfaces//:cpp_sensor_msgs`, not `@ros2_sensor_msgs`. This is already configured in the `BUILD.bazel`.
+
+Ensure ROS 2 Bazel rules are configured. Check `MODULE.bazel` for:
 - `@ros2_rclcpp`
-- `@ros2_sensor_msgs`
+- `@ros2_common_interfaces`
+
+### Runtime library errors
+
+If you get `dlopen error: ... cannot open shared object file`, use `bazel run` instead of directly executing the binary:
+
+```bash
+# ✅ CORRECT - Bazel sets up library paths
+bazel run //franka-driver:lcm_ros2_bridge
+
+# ❌ WRONG - Missing runtime library paths
+./bazel-bin/franka-driver/lcm_ros2_bridge
+```
 
 ## Future Enhancements
 
