@@ -143,6 +143,14 @@ cc_library(
 )
 
 cc_library(
+    name = "panda_status_flags",
+    srcs = ["panda_status_flags.cc"],
+    deps = [
+        "@gflags_sys//:gflags",
+    ],
+)
+
+cc_library(
     name = "shared_memory_lib",
     hdrs = ["shared_memory.hpp"],
     includes = ["."],
@@ -159,6 +167,7 @@ cc_binary(
     deps = [
         ":shared_memory_lib",
         ":panda_status_drake_subscriber",
+        ":panda_status_flags",
         "@drake//systems/lcm:lcm_subscriber_system",
         "@drake//systems/lcm:lcm_interface_system",
         "@drake//systems/analysis:simulator",
