@@ -1200,6 +1200,220 @@ class PandaDriver {
 
     status_msg_.robot_utime = state.time.toMSec() * 1000;
     
+    // =========================================================================
+    // Publish Extended Robot State Data to Additional LCM Channels
+    // =========================================================================
+    
+    // CARTESIAN DATA: Poses, velocities, wrenches
+    drake::lcmt_drake_signal cartesian_msg{};
+    cartesian_msg.timestamp = status_msg_.utime;
+    cartesian_msg.dim = 16 + 16 + 16 + 16 + 16 + 6 + 6 + 6 + 6 + 6;  // Total elements
+    cartesian_msg.val.resize(cartesian_msg.dim);
+    cartesian_msg.coord.resize(cartesian_msg.dim);
+    
+    int idx = 0;
+    // O_T_EE (16): Measured end effector pose in base frame
+    for (int i = 0; i < 16; ++i) {
+      cartesian_msg.val[idx] = state.O_T_EE[i];
+      cartesian_msg.coord[idx] = "O_T_EE_" + std::to_string(i);
+      ++idx;
+    }
+    // O_T_EE_d (16): Desired end effector pose
+    for (int i = 0; i < 16; ++i) {
+      cartesian_msg.val[idx] = state.O_T_EE_d[i];
+      cartesian_msg.coord[idx] = "O_T_EE_d_" + std::to_string(i);
+      ++idx;
+    }
+    // O_T_EE_c (16): Commanded end effector pose
+    for (int i = 0; i < 16; ++i) {
+      cartesian_msg.val[idx] = state.O_T_EE_c[i];
+      cartesian_msg.coord[idx] = "O_T_EE_c_" + std::to_string(i);
+      ++idx;
+    }
+    // F_T_EE (16): End effector frame pose in flange frame
+    for (int i = 0; i < 16; ++i) {
+      cartesian_msg.val[idx] = state.F_T_EE[i];
+      cartesian_msg.coord[idx] = "F_T_EE_" + std::to_string(i);
+      ++idx;
+    }
+    // EE_T_K (16): Stiffness frame pose in end effector frame
+    for (int i = 0; i < 16; ++i) {
+      cartesian_msg.val[idx] = state.EE_T_K[i];
+      cartesian_msg.coord[idx] = "EE_T_K_" + std::to_string(i);
+      ++idx;
+    }
+    // O_dP_EE_d (6): Desired end effector twist
+    for (int i = 0; i < 6; ++i) {
+      cartesian_msg.val[idx] = state.O_dP_EE_d[i];
+      cartesian_msg.coord[idx] = "O_dP_EE_d_" + std::to_string(i);
+      ++idx;
+    }
+    // O_dP_EE_c (6): Commanded end effector twist
+    for (int i = 0; i < 6; ++i) {
+      cartesian_msg.val[idx] = state.O_dP_EE_c[i];
+      cartesian_msg.coord[idx] = "O_dP_EE_c_" + std::to_string(i);
+      ++idx;
+    }
+    // O_ddP_EE_c (6): Commanded end effector acceleration
+    for (int i = 0; i < 6; ++i) {
+      cartesian_msg.val[idx] = state.O_ddP_EE_c[i];
+      cartesian_msg.coord[idx] = "O_ddP_EE_c_" + std::to_string(i);
+      ++idx;
+    }
+    // O_F_ext_hat_K (6): External wrench in base frame
+    for (int i = 0; i < 6; ++i) {
+      cartesian_msg.val[idx] = state.O_F_ext_hat_K[i];
+      cartesian_msg.coord[idx] = "O_F_ext_hat_K_" + std::to_string(i);
+      ++idx;
+    }
+    // K_F_ext_hat_K (6): External wrench in stiffness frame
+    for (int i = 0; i < 6; ++i) {
+      cartesian_msg.val[idx] = state.K_F_ext_hat_K[i];
+      cartesian_msg.coord[idx] = "K_F_ext_hat_K_" + std::to_string(i);
+      ++idx;
+    }
+    lcm_.publish("PANDA_CARTESIAN", &cartesian_msg);
+    
+    // DYNAMICS DATA: Motor states, elbow, masses, inertias
+    drake::lcmt_drake_signal dynamics_msg{};
+    dynamics_msg.timestamp = status_msg_.utime;
+    dynamics_msg.dim = 7 + 7 + 7 + 2 + 2 + 2 + 2 + 2 + 3 + 1 + 3 + 1 + 3 + 1 + 9 + 9 + 9;  // Total elements
+    dynamics_msg.val.resize(dynamics_msg.dim);
+    dynamics_msg.coord.resize(dynamics_msg.dim);
+    
+    idx = 0;
+    // theta (7): Motor positions
+    for (int i = 0; i < 7; ++i) {
+      dynamics_msg.val[idx] = state.theta[i];
+      dynamics_msg.coord[idx] = "theta_" + std::to_string(i);
+      ++idx;
+    }
+    // dtheta (7): Motor velocities
+    for (int i = 0; i < 7; ++i) {
+      dynamics_msg.val[idx] = state.dtheta[i];
+      dynamics_msg.coord[idx] = "dtheta_" + std::to_string(i);
+      ++idx;
+    }
+    // dtau_J (7): Torque derivatives
+    for (int i = 0; i < 7; ++i) {
+      dynamics_msg.val[idx] = state.dtau_J[i];
+      dynamics_msg.coord[idx] = "dtau_J_" + std::to_string(i);
+      ++idx;
+    }
+    // elbow (2): Elbow configuration
+    for (int i = 0; i < 2; ++i) {
+      dynamics_msg.val[idx] = state.elbow[i];
+      dynamics_msg.coord[idx] = "elbow_" + std::to_string(i);
+      ++idx;
+    }
+    // elbow_d (2): Desired elbow configuration
+    for (int i = 0; i < 2; ++i) {
+      dynamics_msg.val[idx] = state.elbow_d[i];
+      dynamics_msg.coord[idx] = "elbow_d_" + std::to_string(i);
+      ++idx;
+    }
+    // elbow_c (2): Commanded elbow configuration
+    for (int i = 0; i < 2; ++i) {
+      dynamics_msg.val[idx] = state.elbow_c[i];
+      dynamics_msg.coord[idx] = "elbow_c_" + std::to_string(i);
+      ++idx;
+    }
+    // delbow_c (2): Commanded elbow velocity
+    for (int i = 0; i < 2; ++i) {
+      dynamics_msg.val[idx] = state.delbow_c[i];
+      dynamics_msg.coord[idx] = "delbow_c_" + std::to_string(i);
+      ++idx;
+    }
+    // ddelbow_c (2): Commanded elbow acceleration
+    for (int i = 0; i < 2; ++i) {
+      dynamics_msg.val[idx] = state.ddelbow_c[i];
+      dynamics_msg.coord[idx] = "ddelbow_c_" + std::to_string(i);
+      ++idx;
+    }
+    // F_x_Cee (3): Center of mass of end effector
+    for (int i = 0; i < 3; ++i) {
+      dynamics_msg.val[idx] = state.F_x_Cee[i];
+      dynamics_msg.coord[idx] = "F_x_Cee_" + std::to_string(i);
+      ++idx;
+    }
+    // m_ee (1): Mass of end effector
+    dynamics_msg.val[idx] = state.m_ee;
+    dynamics_msg.coord[idx] = "m_ee";
+    ++idx;
+    // F_x_Cload (3): Center of mass of external load
+    for (int i = 0; i < 3; ++i) {
+      dynamics_msg.val[idx] = state.F_x_Cload[i];
+      dynamics_msg.coord[idx] = "F_x_Cload_" + std::to_string(i);
+      ++idx;
+    }
+    // m_load (1): Mass of external load
+    dynamics_msg.val[idx] = state.m_load;
+    dynamics_msg.coord[idx] = "m_load";
+    ++idx;
+    // F_x_Ctotal (3): Combined center of mass
+    for (int i = 0; i < 3; ++i) {
+      dynamics_msg.val[idx] = state.F_x_Ctotal[i];
+      dynamics_msg.coord[idx] = "F_x_Ctotal_" + std::to_string(i);
+      ++idx;
+    }
+    // m_total (1): Total mass
+    dynamics_msg.val[idx] = state.m_total;
+    dynamics_msg.coord[idx] = "m_total";
+    ++idx;
+    // I_ee (9): Rotational inertia of end effector
+    for (int i = 0; i < 9; ++i) {
+      dynamics_msg.val[idx] = state.I_ee[i];
+      dynamics_msg.coord[idx] = "I_ee_" + std::to_string(i);
+      ++idx;
+    }
+    // I_load (9): Rotational inertia of external load
+    for (int i = 0; i < 9; ++i) {
+      dynamics_msg.val[idx] = state.I_load[i];
+      dynamics_msg.coord[idx] = "I_load_" + std::to_string(i);
+      ++idx;
+    }
+    // I_total (9): Combined rotational inertia
+    for (int i = 0; i < 9; ++i) {
+      dynamics_msg.val[idx] = state.I_total[i];
+      dynamics_msg.coord[idx] = "I_total_" + std::to_string(i);
+      ++idx;
+    }
+    lcm_.publish("PANDA_DYNAMICS", &dynamics_msg);
+    
+    // CONTACT DATA: Collision and contact detection
+    drake::lcmt_drake_signal contact_msg{};
+    contact_msg.timestamp = status_msg_.utime;
+    contact_msg.dim = 7 + 7 + 6 + 6;  // Total elements
+    contact_msg.val.resize(contact_msg.dim);
+    contact_msg.coord.resize(contact_msg.dim);
+    
+    idx = 0;
+    // joint_contact (7): Joint contact levels
+    for (int i = 0; i < 7; ++i) {
+      contact_msg.val[idx] = state.joint_contact[i];
+      contact_msg.coord[idx] = "joint_contact_" + std::to_string(i);
+      ++idx;
+    }
+    // joint_collision (7): Joint collision levels
+    for (int i = 0; i < 7; ++i) {
+      contact_msg.val[idx] = state.joint_collision[i];
+      contact_msg.coord[idx] = "joint_collision_" + std::to_string(i);
+      ++idx;
+    }
+    // cartesian_contact (6): Cartesian contact levels
+    for (int i = 0; i < 6; ++i) {
+      contact_msg.val[idx] = state.cartesian_contact[i];
+      contact_msg.coord[idx] = "cartesian_contact_" + std::to_string(i);
+      ++idx;
+    }
+    // cartesian_collision (6): Cartesian collision levels
+    for (int i = 0; i < 6; ++i) {
+      contact_msg.val[idx] = state.cartesian_collision[i];
+      contact_msg.coord[idx] = "cartesian_collision_" + std::to_string(i);
+      ++idx;
+    }
+    lcm_.publish("PANDA_CONTACT", &contact_msg);
+    
     if (FLAGS_debug) {
       // Debug printing for LCM publish
       std::cout << "\n=== LCM Debug Info ===" << std::endl;

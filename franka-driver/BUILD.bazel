@@ -194,6 +194,7 @@ cc_binary(
     srcs = ["lcm_ros2_bridge.cc"],
     deps = [
         "@drake//lcmtypes:panda",
+        "@drake//lcmtypes:drake_signal",
         "@lcm_sys//:lcm",
         "@ros2_rclcpp//:rclcpp",
         "@ros2_common_interfaces//:cpp_sensor_msgs",
