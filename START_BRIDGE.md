@@ -187,6 +187,47 @@ bazelisk build //...
 ```
 
 # Subscriber that writes to shared memory:
+Run it via:
 ```bash
 bazel run //franka-driver:sdf_subscriber 
 ```
+
+## Cluster ESDF Subscriber & Shared Memory Interface
+
+This ROS2 node subscribes to `/nvblox/esdf_results` and writes the parsed cluster data to **Boost.Interprocess shared memory** for consumption by other processes (e.g., PandaDriver).
+
+### Shared Memory Segment
+
+* **Segment Name:** `MySharedMemory`
+* **Object Name:** `SharedData`
+* **Type:** `SharedMemoryData`
+
+### Data Written
+
+All cluster data is written into the `clusters` vector in **flattened numeric format**.
+
+**Layout per cluster (11 doubles):**
+
+| Index | Description                        | Type   |
+| ----- | ---------------------------------- | ------ |
+| 0     | Cluster label                      | double |
+| 1-3   | Centroid (x, y, z)                 | double |
+| 4-6   | Capsule start point `p0` (x, y, z) | double |
+| 7-9   | Capsule end point `p1` (x, y, z)   | double |
+| 10    | Capsule radius                     | double |
+
+Multiple clusters are stored sequentially:
+
+```
+[label, cx, cy, cz, p0x, p0y, p0z, p1x, p1y, p1z, radius, ... next cluster ...]
+```
+
+### Flags
+
+* `clusters_ready` is set to `true` whenever new data is written.
+* Other fields (`data`, `ee_wrench`, `gripper_cmd`) remain unchanged.
+
+### Notes
+
+* Access to `clusters` is protected by `mutex` for thread/process safety.
+* The subscriber **overwrites the cluster data on each message**, ensuring the latest state is always available.
