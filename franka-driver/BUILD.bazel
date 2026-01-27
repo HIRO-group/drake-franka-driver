@@ -201,3 +201,21 @@ cc_binary(
     ],
 )
 
+
+# ---------------------------------------------------------------------------
+# SDF Subscriber
+# ---------------------------------------------------------------------------
+
+cc_binary(
+    name = "sdf_subscriber",
+    srcs = ["sdf_subscriber.cc"],
+    deps = [
+        ":shared_memory_lib",
+        "@drake//lcmtypes:panda",
+        "@drake//lcmtypes:drake_signal",
+        "@lcm_sys//:lcm",
+        "@ros2_rclcpp//:rclcpp",
+        "@ros2_common_interfaces//:cpp_sensor_msgs",
+    ],
+    copts = ["-I/usr/include"],
+)

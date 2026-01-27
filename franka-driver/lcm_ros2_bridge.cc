@@ -63,6 +63,9 @@ class LcmRos2Bridge : public rclcpp::Node {
     lcm_->subscribe("PANDA_CARTESIAN", &LcmRos2Bridge::HandleCartesian, this);
     lcm_->subscribe("PANDA_DYNAMICS", &LcmRos2Bridge::HandleDynamics, this);
     lcm_->subscribe("PANDA_CONTACT", &LcmRos2Bridge::HandleContact, this);
+
+    // Subscribe to the SDF node
+    // lcm_->subscribe("/nvblox/esdf_results", &LcmRos2Bridge::HandleSDF, this);
     
     // Create ROS publishers - Joint States
     joint_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>(
@@ -382,6 +385,17 @@ class LcmRos2Bridge : public rclcpp::Node {
     }
     mass_properties_pub_->publish(mass_props);
   }
+
+//   void HandleSDF(const lcm::ReceiveBuffer* rbuf,
+//                const std::string& channel,
+//                const lcm::String* msg) {
+//   (void)rbuf;  // Unused
+//   (void)channel;  // Unused
+
+//   // Print the received JSON string message
+//   RCLCPP_INFO(this->get_logger(), "Received message on channel: %s", channel.c_str());
+//   RCLCPP_INFO(this->get_logger(), "Message: %s", msg->data.c_str());
+// }
   
   void HandleContact(const lcm::ReceiveBuffer* rbuf,
                     const std::string& channel,

@@ -5,7 +5,7 @@
 ### Terminal 1: Run Franka Driver (if not already running)
 ```bash
 cd ~/drake-franka-driver
-./bazel-bin/franka-driver/franka_driver --robot_ip_address=<YOUR_ROBOT_IP>
+./bazel-bin/franka-driver/franka_driver_v5 --robot_ip_address=192.168.0.2
 ```
 
 ### Terminal 2: Run Extended C++ Bridge
@@ -184,4 +184,9 @@ ros2 topic echo /franka/joint_states
 Build:
 ```bash
 bazelisk build //...
+```
+
+# Subscriber that writes to shared memory:
+```bash
+bazel run //franka-driver:sdf_subscriber 
 ```

@@ -154,7 +154,7 @@ load(
     "ros2_repositories",
 )
 ros2_workspace_repositories()
-ros2_repositories()
+ros2_repositories(rmw = ["cyclonedds"], ros_distro = "humble")
 
 # ============================================================================
 # Notes
