@@ -12,4 +12,5 @@ core
 *.txt
 *.csv
 
-build/
+build/log/
+log/
