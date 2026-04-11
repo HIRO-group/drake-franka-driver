@@ -219,3 +219,27 @@ cc_binary(
     ],
     copts = ["-I/usr/include"],
 )
+
+# ---------------------------------------------------------------------------
+# Constraint Visualizer (RViz test node for capsule constraint math)
+# ---------------------------------------------------------------------------
+
+cc_binary(
+    name = "constraint_visualizer",
+    srcs = ["constraint_visualizer.cc"],
+    deps = [
+        ":shared_memory_lib",
+        "@drake//common:common",
+        "@drake//common:find_runfiles",
+        "@drake//multibody/parsing:parser",
+        "@drake//multibody/plant:plant",
+        "@ros2_rclcpp//:rclcpp",
+        "@ros2_common_interfaces//:cpp_visualization_msgs",
+        "@ros2_common_interfaces//:cpp_geometry_msgs",
+        "@ros2_common_interfaces//:cpp_sensor_msgs",
+    ],
+    data = [
+        "//franka_description:franka_description",
+        "//urdf_location:franka_urdf_models",
+    ],
+)

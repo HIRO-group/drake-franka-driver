@@ -1,6 +1,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <nlohmann/json.hpp>
+#include <fstream>
 #include "shared_memory.hpp"
 #include <boost/interprocess/managed_shared_memory.hpp>
 #include <boost/interprocess/sync/scoped_lock.hpp>
@@ -12,24 +13,8 @@ using json = nlohmann::json;
 class SDFSubscriber : public rclcpp::Node {
 public:
     SDFSubscriber()
-        : Node("cluster_esdf_listener"),
-          shm_segment_(bip::open_or_create, "MySharedMemory", 65536), // Create or open shared memory segment
-          shm_(nullptr)
+        : Node("cluster_esdf_listener")
     {
-        // Attempt to find existing shared memory object named "SharedData"
-        auto res = shm_segment_.find<SharedMemoryData>("SharedData");
-        shm_ = res.first;
-
-        if (!shm_) {
-            // If not found, construct a new SharedMemoryData object in shared memory
-            auto* sm = shm_segment_.get_segment_manager();
-            SharedMemoryData::ShmemAllocator alloc(sm);
-            shm_ = shm_segment_.construct<SharedMemoryData>("SharedData")(alloc);
-            RCLCPP_INFO(this->get_logger(), "Created new SharedMemoryData");
-        } else {
-            RCLCPP_INFO(this->get_logger(), "Found existing SharedMemoryData");
-        }
-
         // Create ROS2 subscription to /nvblox/esdf_results
         subscription_ = this->create_subscription<std_msgs::msg::String>(
             "/nvblox/esdf_results",
@@ -39,23 +24,35 @@ public:
     }
 
 private:
-    bip::managed_shared_memory shm_segment_;      // Shared memory segment
-    SharedMemoryData* shm_;                       // Pointer to shared memory object
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr subscription_;
 
     // Callback called whenever a new message is received on /nvblox/esdf_results
     void listenerCallback(const std_msgs::msg::String::SharedPtr msg) {
-        if (!shm_) return;
+        // Re-open shared memory each callback so we always use the segment
+        // created by panda_status_drake_subscriber_main (which removes+recreates on startup)
+        bip::managed_shared_memory shm_segment;
+        SharedMemoryData* shm = nullptr;
+        try {
+            shm_segment = bip::managed_shared_memory(bip::open_only, "MySharedMemory");
+            shm = shm_segment.find<SharedMemoryData>("SharedData").first;
+        } catch (const std::exception& e) {
+            RCLCPP_WARN(this->get_logger(), "Shared memory not available yet: %s", e.what());
+            return;
+        }
+        if (!shm) {
+            RCLCPP_WARN(this->get_logger(), "SharedData not found in shared memory");
+            return;
+        }
 
         try {
             // Parse the JSON string from the ROS message
             json j = json::parse(msg->data);
 
             // Lock shared memory mutex for thread/process safety
-            bip::scoped_lock<bip::interprocess_mutex> lock(shm_->mutex);
+            bip::scoped_lock<bip::interprocess_mutex> lock(shm->mutex);
 
             // Clear previous cluster data
-            shm_->clusters.clear();
+            shm->clusters.clear();
 
             // Iterate over all clusters in the JSON
             for (auto& [label, cluster] : j.items()) {
@@ -86,21 +83,36 @@ private:
                 // Data layout per cluster (flattened):
                 // [label, cx, cy, cz, p0x, p0y, p0z, p1x, p1y, p1z, radius]
                 // Each element is a double. Multiple clusters are appended sequentially.
-                shm_->clusters.push_back((double)lbl);
-                shm_->clusters.push_back(c[0]);
-                shm_->clusters.push_back(c[1]);
-                shm_->clusters.push_back(c[2]);
-                shm_->clusters.push_back(p0[0]);
-                shm_->clusters.push_back(p0[1]);
-                shm_->clusters.push_back(p0[2]);
-                shm_->clusters.push_back(p1[0]);
-                shm_->clusters.push_back(p1[1]);
-                shm_->clusters.push_back(p1[2]);
-                shm_->clusters.push_back(r);
+                shm->clusters.push_back((double)lbl);
+                shm->clusters.push_back(c[0]);
+                shm->clusters.push_back(c[1]);
+                shm->clusters.push_back(c[2]);
+                shm->clusters.push_back(p0[0]);
+                shm->clusters.push_back(p0[1]);
+                shm->clusters.push_back(p0[2]);
+                shm->clusters.push_back(p1[0]);
+                shm->clusters.push_back(p1[1]);
+                shm->clusters.push_back(p1[2]);
+                shm->clusters.push_back(r);
             }
 
             // Set flag indicating that new cluster data is available
-            shm_->clusters_ready = true;
+            shm->clusters_ready = true;
+
+            // Log centroids to file
+            std::ofstream cluster_log("sdf_cluster_log.txt", std::ios::app);
+            if (cluster_log.is_open()) {
+                size_t num_clusters = shm->clusters.size() / 11;
+                cluster_log << "--- " << num_clusters << " clusters ---\n";
+                for (size_t ci = 0; ci + 10 < shm->clusters.size(); ci += 11) {
+                    cluster_log << "cluster " << ci / 11
+                                << ": label=" << shm->clusters[ci]
+                                << " centroid=(" << shm->clusters[ci+1]
+                                << ", " << shm->clusters[ci+2]
+                                << ", " << shm->clusters[ci+3] << ")\n";
+                }
+                cluster_log.close();
+            }
 
         } catch (const std::exception& e) {
             RCLCPP_ERROR(this->get_logger(), "JSON/SHM error: %s", e.what());
